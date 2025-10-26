@@ -1,0 +1,78 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Bảng lưu thông tin người dùng
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+
+  // Quan hệ: 1 User có thể tạo nhiều Group
+  groupsCreated Group[] @relation("GroupCreator")
+
+  // Quan hệ: 1 User có thể tham gia nhiều GroupMember
+  memberships GroupMember[]
+
+  // Quan hệ: 1 User có thể trả nhiều Expense
+  expensesPaid Expense[] @relation("ExpensePayer")
+}
+
+// Bảng lưu thông tin nhóm
+model Group {
+  id        Int      @id @default(autoincrement())
+  name      String
+  createdAt DateTime @default(now())
+
+  // Quan hệ: 1 Group được tạo bởi 1 User
+  creatorId Int
+  creator   User     @relation("GroupCreator", fields: [creatorId], references: [id])
+
+  // Quan hệ: 1 Group có nhiều GroupMember
+  members GroupMember[]
+
+  // Quan hệ: 1 Group có nhiều Expense
+  expenses Expense[]
+}
+
+// Bảng nối User và Group (Quan hệ nhiều-nhiều)
+model GroupMember {
+  joinedAt DateTime @default(now())
+
+  // Quan hệ: 1 GroupMember thuộc về 1 User
+  userId Int
+  user   User @relation(fields: [userId], references: [id])
+
+  // Quan hệ: 1 GroupMember thuộc về 1 Group
+  groupId Int
+  group   Group @relation(fields: [groupId], references: [id])
+
+  // Khóa chính phức hợp: đảm bảo 1 user chỉ ở trong 1 group 1 lần
+  @@id([userId, groupId])
+}
+
+// Bảng lưu các khoản chi tiêu
+model Expense {
+  id          Int      @id @default(autoincrement())
+  description String
+  amount      Decimal  @db.Decimal(10, 2) // Ví dụ: 12345678.99
+  createdAt   DateTime @default(now())
+
+  // Quan hệ: 1 Expense được trả bởi 1 User
+  paidById Int
+  paidBy   User @relation("ExpensePayer", fields: [paidById], references: [id])
+
+  // Quan hệ: 1 Expense thuộc về 1 Group
+  groupId Int
+  group   Group @relation(fields: [groupId], references: [id])
+}
