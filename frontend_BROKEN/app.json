@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Sổ Chi Tiêu Nhóm",
-    "slug": "group-expense-split",
+    "name": "frontend",
+    "slug": "frontend",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -20,19 +20,10 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "package": "com.nhatopp.frontend"
+      "edgeToEdgeEnabled": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    },
-    "plugins": [
-      "expo-secure-store"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "2cf28512-de16-4112-8eca-77fe0da81b0d"
-      }
     }
   }
 }
