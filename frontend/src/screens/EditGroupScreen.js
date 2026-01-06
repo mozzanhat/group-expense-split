@@ -1,64 +1,104 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import api from '../api';
+import { useAuth } from '../context/AuthContext';
+import { formatCurrency } from '../utils/format';
 
 export default function EditGroupScreen({ route, navigation }) {
-  // Nhận ID và Tên cũ từ màn hình trước
-  const { groupId, currentName } = route.params;
+    const { groupId } = route.params;
+    const { user } = useAuth();
+    const [pendingExpenses, setPendingExpenses] = useState([]);
+    const [groupName, setGroupName] = useState('');
 
-  const [name, setName] = useState(currentName);
-  const [loading, setLoading] = useState(false);
-
-  const handleUpdate = async () => {
-    if (!name.trim()) {
-      Alert.alert('Lỗi', 'Tên nhóm không được để trống');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Gọi API PUT vừa viết
-      await api.put(`/groups/${groupId}`, { name: name });
-      
-      Alert.alert('Thành công', 'Đã đổi tên nhóm!', [
-        { 
-            text: 'OK', 
-            onPress: () => {
-                // Quay về và yêu cầu màn hình trước cập nhật lại tên (nếu cần thiết)
-                // Tuy nhiên, GroupDetail sẽ tự reload nhờ useFocusEffect
-                navigation.goBack();
-            } 
+    const fetchData = async () => {
+        try {
+            // Tận dụng API debts để lấy danh sách pending (đã sửa ở server)
+            const res = await api.get(`/groups/${groupId}/debts`);
+            setPendingExpenses(res.data.pendingExpenses || []);
+            // Gọi thêm API lấy tên nhóm nếu cần
+        } catch (error) {
+            console.error(error);
         }
-      ]);
-    } catch (error) {
-        const msg = error.response?.data?.message || "Không thể đổi tên.";
-        Alert.alert("Lỗi", msg);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.label}>Tên nhóm mới:</Text>
-      <TextInput
-        style={styles.input}
-        value={name}
-        onChangeText={setName}
-        autoFocus={true} // Tự động bật bàn phím
-      />
+    useFocusEffect(useCallback(() => { fetchData(); }, []));
 
-      {loading ? (
-        <ActivityIndicator size="large" color="blue" />
-      ) : (
-        <Button title="Lưu Thay Đổi" onPress={handleUpdate} />
-      )}
-    </View>
-  );
+    const handleVote = async (expenseId, action) => {
+        try {
+            await api.post(`/expenses/${expenseId}/vote`, { action });
+            Alert.alert("Thành công", action === "AGREE" ? "Đã đồng ý!" : "Đã từ chối và thoát khỏi khoản chi!");
+            fetchData(); // Tải lại để cập nhật danh sách
+        } catch (error) {
+            console.error(error);
+            Alert.alert("Lỗi", "Không thể gửi biểu quyết.");
+        }
+    };
+
+    const renderPendingItem = ({ item }) => {
+        // Kiểm tra xem User hiện tại có nằm trong split và CHƯA duyệt không
+        const mySplit = item.splits.find(s => s.userId === user.id);
+        
+        // Nếu mình không liên quan, hoặc đã duyệt rồi -> Không hiện nút
+        if (!mySplit || mySplit.hasApproved) return null;
+
+        return (
+            <View style={styles.pendingCard}>
+                <Text style={styles.pendingTitle}>{item.description}</Text>
+                <Text>Tổng: {formatCurrency(item.amount)} + Lãi: {formatCurrency(item.profit)}</Text>
+                <Text style={{fontStyle: 'italic', color: 'gray', marginBottom: 10}}>
+                    Cần bạn xác nhận để chuyển sang Hàng chính
+                </Text>
+
+                <View style={styles.btnRow}>
+                    <TouchableOpacity 
+                        style={[styles.btn, styles.btnReject]} 
+                        onPress={() => handleVote(item.id, "REJECT")}
+                    >
+                        <Text style={styles.btnText}>Không đồng ý</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity 
+                        style={[styles.btn, styles.btnAgree]} 
+                        onPress={() => handleVote(item.id, "AGREE")}
+                    >
+                        <Text style={styles.btnText}>Đồng ý</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        );
+    };
+
+    return (
+        <ScrollView style={styles.container}>
+            <Text style={styles.header}>Quản lý nhóm</Text>
+
+            {pendingExpenses.length > 0 && (
+                <View>
+                    <Text style={styles.sectionTitle}>⚠️ Hàng chờ duyệt ({pendingExpenses.length})</Text>
+                    <FlatList 
+                        data={pendingExpenses}
+                        keyExtractor={item => item.id.toString()}
+                        renderItem={renderPendingItem}
+                        scrollEnabled={false}
+                    />
+                </View>
+            )}
+
+            {/* Các chức năng khác của EditGroupScreen như Đổi tên, Xóa thành viên... */}
+        </ScrollView>
+    );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff', justifyContent: 'center' },
-  label: { fontSize: 16, marginBottom: 8, fontWeight: 'bold' },
-  input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, padding: 12, marginBottom: 20, fontSize: 18 },
+    container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
+    header: { fontSize: 22, fontWeight: 'bold', marginBottom: 20 },
+    sectionTitle: { fontSize: 18, fontWeight: 'bold', marginVertical: 10, color: '#e67e22' },
+    pendingCard: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 10, elevation: 3 },
+    pendingTitle: { fontSize: 16, fontWeight: 'bold' },
+    btnRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
+    btn: { flex: 0.48, padding: 10, borderRadius: 5, alignItems: 'center' },
+    btnAgree: { backgroundColor: '#2ecc71' },
+    btnReject: { backgroundColor: '#e74c3c' },
+    btnText: { color: 'white', fontWeight: 'bold' }
 });

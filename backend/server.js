@@ -120,88 +120,85 @@ fastify.post('/groups/:id/members', { onRequest: [authenticate] }, async (reques
 });
 
 // backend/server.js  8 Tính toán số nợ trong nhóm------------------------------------
+// 3. CẬP NHẬT API TÍNH NỢ (Logic chia tiền lãi + Chỉ tính hàng chính)
 fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, reply) => {
     try {
         const groupId = parseInt(request.params.id);
-
-        const members = await prisma.groupMember.findMany({ 
-            where: { groupId }, include: { user: true } 
+        const members = await prisma.groupMember.findMany({ where: { groupId }, include: { user: true } });
+        
+        // Lấy các khoản chi ĐÃ DUYỆT (Hàng chính)
+        const expenses = await prisma.expense.findMany({ 
+            where: { 
+                groupId,
+                isApproved: true // CHỈ LẤY HÀNG CHÍNH
+            },
+            include: { splits: true } 
         });
 
-        // Lấy chi phí và sắp xếp theo ngày (để dễ theo dõi)
-        const expenses = await prisma.expense.findMany({ 
-            where: { groupId },
-            include: { splits: true },
-            orderBy: { createdAt: 'asc' }
+        // Lấy danh sách HÀNG CHỜ để hiển thị thông báo (nếu cần)
+        const pendingExpenses = await prisma.expense.findMany({
+            where: { groupId, isApproved: false },
+            include: { splits: true }
         });
 
         let totalGroupSpend = 0; 
         const balances = {}; 
-
-        members.forEach(m => {
-            balances[m.userId] = { 
-                name: m.user.name, 
-                paid: 0, owe: 0, 
-            };
-        });
+        members.forEach(m => balances[m.userId] = { name: m.user.name, paid: 0, owe: 0 });
 
         expenses.forEach(e => {
             const amount = parseFloat(e.amount);
-            const payerId = e.paidById; // Người chi tiền (Người trả nợ)
+            const profit = parseFloat(e.profit);
+            const payerId = e.paidById;
             
-            // 1. Kiểm tra xem có phải là trả nợ không
-            const isDebtPayment = e.description.toLowerCase().includes("trả nợ") 
-                               || e.description.toLowerCase().includes("thanh toán");
+            // Bỏ qua khoản trả nợ chưa xác nhận (Logic cũ)
+            const isDebtPayment = e.description.toLowerCase().includes("trả nợ");
+            if (isDebtPayment && !e.isConfirmed) return;
 
-            // 🔥 LOGIC QUAN TRỌNG NHẤT:
-            // Nếu là "Trả nợ" mà CHƯA XÁC NHẬN (isConfirmed == false) 
-            // -> Bỏ qua ngay, coi như chưa trả, nợ vẫn y nguyên.
-            if (isDebtPayment && !e.isConfirmed) {
-                return; 
-            }
+            if (!isDebtPayment) totalGroupSpend += amount;
 
-            // 2. Nếu không phải trả nợ (là chi tiêu nhóm) -> Cộng vào tổng
-            if (!isDebtPayment) {
-                totalGroupSpend += amount;
-            }
-
-            // 3. Tính toán Ví (Chỉ chạy xuống đây nếu đã xác nhận hoặc là chi tiêu thường)
+            // 1. Tính tiền GỐC
+            if (balances[payerId]) balances[payerId].paid += amount;
             
-            // Người chi tiền (Đã trả)
-            if (balances[payerId]) {
-                balances[payerId].paid += amount;
-            }
-
-            // Người thụ hưởng (Đã nhận)
-            const splitUsers = e.splits; 
+            const splitUsers = e.splits;
             if (splitUsers.length > 0) {
-                const sharePerPerson = amount / splitUsers.length;
+                const shareBase = amount / splitUsers.length;
                 splitUsers.forEach(split => {
-                    const uid = split.userId;
-                    if (balances[uid]) {
-                        balances[uid].owe += sharePerPerson;
-                    }
+                    if (balances[split.userId]) balances[split.userId].owe += shareBase;
                 });
             } else {
                 if (balances[payerId]) balances[payerId].owe += amount;
             }
+
+            // 2. Tính tiền LÃI (Chỉ chia cho những người có paysProfit = true)
+            if (profit > 0 && balances[payerId]) {
+                 // Người trả được cộng thêm phần lãi vào "Đã chi" (vì họ ứng trước hoặc được hưởng)
+                 // Lưu ý: Logic tiền lãi hơi trừu tượng. 
+                 // Ở đây hiểu là: Payer bỏ ra (Gốc + Lãi) hay Payer muốn thu về (Gốc + Lãi)?
+                 // Thường là Payer muốn thu về Lãi. Nên coi như Payer đã "paid" phần lãi đó.
+                 balances[payerId].paid += profit;
+
+                 const profitPayers = splitUsers.filter(s => s.paysProfit);
+                 if (profitPayers.length > 0) {
+                     const shareProfit = profit / profitPayers.length;
+                     profitPayers.forEach(p => {
+                         if (balances[p.userId]) balances[p.userId].owe += shareProfit;
+                     });
+                 }
+            }
         });
 
-        const debts = Object.keys(balances).map(uid => {
-            const userBalance = balances[uid];
-            return {
-                userId: parseInt(uid),
-                name: userBalance.name,
-                paid: userBalance.paid,
-                spent: userBalance.owe, 
-                balance: userBalance.paid - userBalance.owe 
-            };
-        });
+        const debts = Object.keys(balances).map(uid => ({
+            userId: parseInt(uid),
+            name: balances[uid].name,
+            paid: balances[uid].paid,
+            spent: balances[uid].owe, 
+            balance: balances[uid].paid - balances[uid].owe 
+        }));
 
-        reply.send({ total: totalGroupSpend, debts });
+        // Trả về cả pendingExpenses để Frontend biết có hàng chờ
+        reply.send({ total: totalGroupSpend, debts, pendingCount: pendingExpenses.length, pendingExpenses });
 
     } catch (err) {
-        console.error(err);
         reply.status(500).send(err);
     }
 });
@@ -210,23 +207,18 @@ fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, 
 // 7. API TẠO CHI PHÍ (CÓ HẠN TRẢ VÀ BẢO MẬT)
 // Sửa app.post thành fastify.post
 // 7. API TẠO CHI PHÍ (CÓ CHỌN NGƯỜI CHIA TIỀN)
+// 1. CẬP NHẬT API TẠO CHI PHÍ (Thêm xử lý Lãi & Hàng chờ)
 fastify.post('/expenses', { onRequest: [authenticate] }, async (request, reply) => {
-    // Nhận thêm involvedUserIds: Là mảng chứa ID những người phải trả tiền
-    // Ví dụ gửi lên: { ..., "involvedUserIds": [1, 3] }
-    const { description, amount, groupId, paidById, profit, dueDate, involvedUserIds } = request.body;
+    // Nhận thêm profitPayerIds (Danh sách người phải trả lãi)
+    const { description, amount, groupId, paidById, profit, dueDate, involvedUserIds, profitPayerIds } = request.body;
 
-    // 1. Kiểm tra dữ liệu đầu vào
-    if (!description || !amount || !groupId || !paidById) {
+    if (!description || !amount || !groupId || !involvedUserIds?.length) {
         return reply.code(400).send({ error: "Thiếu thông tin bắt buộc" });
     }
 
-    // Kiểm tra xem có chọn người chia tiền không
-    if (!involvedUserIds || !Array.isArray(involvedUserIds) || involvedUserIds.length === 0) {
-        return reply.code(400).send({ error: "Phải chọn ít nhất 1 người để chia tiền" });
-    }
-
     try {
-        // 2. Lưu vào Database (Dùng Transaction lồng nhau của Prisma)
+        const creatorId = request.user.id;
+
         const expense = await prisma.expense.create({
             data: {
                 description,
@@ -237,28 +229,78 @@ fastify.post('/expenses', { onRequest: [authenticate] }, async (request, reply) 
                 dueDate: dueDate ? new Date(dueDate) : null,
                 isConfirmed: false,
                 
-                // ✅ QUAN TRỌNG: Lưu danh sách người được chọn vào bảng ExpenseSplit
+                // Mặc định là FALSE (Hàng chờ), trừ khi chỉ có 1 mình người tạo tự chơi
+                isApproved: involvedUserIds.length === 1 && involvedUserIds[0] === creatorId,
+
                 splits: {
                     create: involvedUserIds.map(uid => ({
-                        userId: parseInt(uid)
+                        userId: parseInt(uid),
+                        // Nếu ID này nằm trong danh sách trả lãi -> true
+                        paysProfit: profitPayerIds ? profitPayerIds.includes(uid) : false,
+                        // Người tạo mặc định là ĐỒNG Ý, người khác là CHƯA (false)
+                        hasApproved: parseInt(uid) === creatorId
                     }))
                 }
-            },
-            // Trả về kèm danh sách người chia tiền để frontend hiển thị nếu cần
-            include: {
-                splits: true 
             }
         });
-        
         return reply.send(expense);
-
     } catch (error) {
-        console.error("Lỗi thêm chi phí:", error);
-        return reply.code(500).send({ error: "Lỗi server: Không thể lưu chi phí này" });
+        console.error(error);
+        return reply.code(500).send({ error: "Lỗi server" });
     }
 });
 
+// . API BIỂU QUYẾT (Đồng ý / Không đồng ý)16 ------------------------------------------------
+fastify.post('/expenses/:id/vote', { onRequest: [authenticate] }, async (request, reply) => {
+    const expenseId = parseInt(request.params.id);
+    const userId = request.user.id;
+    const { action } = request.body; // "AGREE" hoặc "REJECT"
 
+    try {
+        if (action === "REJECT") {
+            // LOGIC: Nếu không đồng ý -> Xóa khỏi danh sách splits
+            await prisma.expenseSplit.deleteMany({
+                where: { expenseId, userId }
+            });
+        } else {
+            // LOGIC: Đồng ý -> Cập nhật hasApproved = true
+            await prisma.expenseSplit.updateMany({
+                where: { expenseId, userId },
+                data: { hasApproved: true }
+            });
+        }
+
+        // KIỂM TRA: Xem tất cả những người CÒN LẠI đã đồng ý hết chưa?
+        const remainingSplits = await prisma.expenseSplit.findMany({
+            where: { expenseId }
+        });
+
+        // Nếu danh sách rỗng (ai cũng từ chối hết) -> Xóa luôn expense hoặc để đó tùy bạn
+        if (remainingSplits.length === 0) {
+            // Tùy chọn: Xóa expense rỗng
+            await prisma.expense.delete({ where: { id: expenseId } });
+            return reply.send({ message: "Khoản chi đã bị hủy do tất cả từ chối" });
+        }
+
+        // Kiểm tra xem có ai chưa duyệt không
+        const allApproved = remainingSplits.every(split => split.hasApproved === true);
+
+        if (allApproved) {
+            // Nếu tất cả còn lại đều OK -> Chuyển sang HÀNG CHÍNH
+            await prisma.expense.update({
+                where: { id: expenseId },
+                data: { isApproved: true }
+            });
+            return reply.send({ message: "Đã duyệt! Khoản chi chuyển sang hàng chính." });
+        }
+
+        return reply.send({ message: "Đã ghi nhận phiếu bầu. Chờ thành viên khác..." });
+
+    } catch (error) {
+        console.error(error);
+        return reply.code(500).send({ error: "Lỗi xử lý biểu quyết" });
+    }
+});
 
 // === API XÓA CHI PHÍ === 10
 fastify.delete('/expenses/:id', { onRequest: [authenticate] }, async (request, reply) => {

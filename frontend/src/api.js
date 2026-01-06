@@ -5,7 +5,7 @@ import axios from 'axios';
 
 // 1. Tạo instance
 const instance = axios.create({
-    baseURL: 'http://172.22.3.152:3000', // Thay IP của bạn vào đây
+    baseURL: 'http://192.168.1.33:3000', // Thay IP của bạn vào đây
     headers: {
         'Content-Type': 'application/json',
     },

@@ -65,32 +65,42 @@ model GroupMember {
 // Bảng lưu các khoản chi tiêu------------------------------------------
 // ... Các model User, Group giữ nguyên ...
 
+// ... (User, Group giữ nguyên)
+
 model Expense {
   id          Int      @id @default(autoincrement())
   description String
   amount      Float
   profit      Float    @default(0)
   dueDate     DateTime?
-  isConfirmed Boolean  @default(false)
+  
+  // 1. Trạng thái thanh toán (Cũ: dùng để xác nhận đã trả nợ xong chưa)
+  isConfirmed Boolean  @default(false) 
+  
+  // 2. MỚI: Trạng thái duyệt của nhóm (Hàng chờ vs Hàng chính)
+  // false = Hàng chờ (Pending), true = Hàng chính (Active)
+  isApproved  Boolean  @default(false)
+
   createdAt   DateTime @default(now())
   
   groupId     Int
   group       Group    @relation(fields: [groupId], references: [id])
-  
   paidById    Int
   paidBy      User     @relation("ExpensePayer", fields: [paidById], references: [id])
-
-  // QUAN TRỌNG: Mối quan hệ với bảng chia tiền mới
   splits      ExpenseSplit[] 
 }
 
-// BẢNG MỚI: Lưu danh sách những người phải trả tiền cho khoản chi đó
 model ExpenseSplit {
   expenseId Int
   expense   Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
-  
   userId    Int
   user      User    @relation(fields: [userId], references: [id])
 
-  @@id([expenseId, userId]) // Khóa chính kép
+  // 3. MỚI: Người này có phải trả tiền lời không?
+  paysProfit Boolean @default(false)
+
+  // 4. MỚI: Người này đã bấm Đồng ý chưa?
+  hasApproved Boolean @default(false)
+
+  @@id([expenseId, userId])
 }

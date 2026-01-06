@@ -19,9 +19,14 @@ export default function AddExpenseScreen({ route, navigation }) {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // State cho danh sách thành viên và việc chọn người chia tiền
+  // State danh sách thành viên
   const [members, setMembers] = useState([]);
-  const [involvedUserIds, setInvolvedUserIds] = useState([]); // Danh sách ID người được chọn
+  
+  // State 1: Danh sách người chịu tiền GỐC
+  const [involvedUserIds, setInvolvedUserIds] = useState([]); 
+
+  // State 2: Danh sách người chịu tiền LÃI (Mới)
+  const [profitPayerIds, setProfitPayerIds] = useState([]);
 
   // 1. Tải danh sách thành viên khi vừa vào màn hình
   useEffect(() => {
@@ -30,15 +35,14 @@ export default function AddExpenseScreen({ route, navigation }) {
 
   const fetchGroupMembers = async () => {
     try {
-      // Gọi API lấy chi tiết nhóm (bao gồm thành viên)
       const response = await api.get(`/groups/${groupId}`);
       const groupMembers = response.data.members || [];
-      
       setMembers(groupMembers);
 
-      // Mặc định: Chọn TẤT CẢ mọi người (chia đều cho cả nhóm)
+      // Mặc định: Chọn TẤT CẢ mọi người (chia đều Gốc và Lãi)
       const allMemberIds = groupMembers.map(m => m.user.id);
       setInvolvedUserIds(allMemberIds);
+      setProfitPayerIds(allMemberIds);
 
     } catch (error) {
       console.error("Lỗi tải thành viên:", error);
@@ -46,14 +50,25 @@ export default function AddExpenseScreen({ route, navigation }) {
     }
   };
 
-  // Hàm xử lý khi bấm vào tên thành viên (Chọn/Bỏ chọn)
+  // Hàm chọn/bỏ chọn người chịu GỐC
   const toggleUserSelection = (userId) => {
     if (involvedUserIds.includes(userId)) {
-      // Nếu đang chọn -> Bỏ chọn
+      // Nếu bỏ chọn Gốc -> Tự động bỏ chọn Lãi luôn (vì không vay thì không trả lãi)
       setInvolvedUserIds(involvedUserIds.filter(id => id !== userId));
+      setProfitPayerIds(profitPayerIds.filter(id => id !== userId));
     } else {
-      // Nếu chưa chọn -> Thêm vào
+      // Nếu chọn thêm Gốc -> Tự động thêm vào Lãi (để tiện thao tác)
       setInvolvedUserIds([...involvedUserIds, userId]);
+      setProfitPayerIds([...profitPayerIds, userId]);
+    }
+  };
+
+  // Hàm chọn/bỏ chọn người chịu LÃI
+  const toggleProfitPayer = (userId) => {
+    if (profitPayerIds.includes(userId)) {
+      setProfitPayerIds(profitPayerIds.filter(id => id !== userId));
+    } else {
+      setProfitPayerIds([...profitPayerIds, userId]);
     }
   };
 
@@ -64,7 +79,6 @@ export default function AddExpenseScreen({ route, navigation }) {
       return;
     }
 
-    // Validate danh sách chia tiền
     if (involvedUserIds.length === 0) {
       Alert.alert('Chưa chọn người', 'Phải chọn ít nhất 1 người để chia tiền!');
       return;
@@ -80,11 +94,14 @@ export default function AddExpenseScreen({ route, navigation }) {
         profit: parseFloat(profit) || 0,
         dueDate: dueDate.toISOString(),
         
-        // Gửi kèm danh sách người chịu tiền
-        involvedUserIds: involvedUserIds 
+        // Gửi danh sách người chịu Gốc
+        involvedUserIds: involvedUserIds,
+        // Gửi danh sách người chịu Lãi
+        profitPayerIds: profitPayerIds
       });
       
-      Alert.alert('Thành công', 'Đã thêm khoản chi mới!');
+      // Thông báo khác đi một chút vì giờ nó vào Hàng chờ
+      Alert.alert('Đã gửi yêu cầu', 'Khoản chi đã được thêm vào Hàng Chờ. Chờ các thành viên khác duyệt!');
       navigation.goBack(); 
     } catch (error) {
       console.log(error);
@@ -139,14 +156,14 @@ export default function AddExpenseScreen({ route, navigation }) {
         <DateTimePicker value={dueDate} mode="date" display="default" onChange={onChangeDate} />
       )}
 
-      {/* --- PHẦN 2: CHỌN NGƯỜI CHIA TIỀN --- */}
-      <Text style={styles.sectionTitle}>Chia cho ai? (Chọn người phải trả)</Text>
+      {/* --- PHẦN 2: CHỌN NGƯỜI CHIA TIỀN GỐC --- */}
+      <Text style={styles.sectionTitle}>1. Chia GỐC cho ai?</Text>
       <View style={styles.membersContainer}>
         {members.map((member) => {
           const isSelected = involvedUserIds.includes(member.user.id);
           return (
             <TouchableOpacity 
-              key={member.userId} 
+              key={member.userId} // Đã sửa key
               style={[styles.memberBadge, isSelected ? styles.badgeSelected : styles.badgeUnselected]}
               onPress={() => toggleUserSelection(member.user.id)}
             >
@@ -158,11 +175,40 @@ export default function AddExpenseScreen({ route, navigation }) {
         })}
       </View>
 
+      {/* --- PHẦN 3: CHỌN NGƯỜI TRẢ LÃI (MỚI) --- */}
+      {/* Chỉ hiện phần này nếu có nhập tiền lãi */}
+      {(parseFloat(profit) > 0) && (
+        <View>
+          <Text style={[styles.sectionTitle, { color: '#e67e22' }]}>2. Chia LÃI cho ai?</Text>
+          <Text style={styles.hintText}>(Chỉ những người được chọn ở trên mới hiện ở đây)</Text>
+          
+          <View style={styles.membersContainer}>
+            {members.map((member) => {
+              // Chỉ hiện những người ĐÃ ĐƯỢC CHỌN chia tiền Gốc
+              if (!involvedUserIds.includes(member.user.id)) return null;
+              
+              const isProfitPayer = profitPayerIds.includes(member.user.id);
+              return (
+                <TouchableOpacity 
+                  key={`profit-${member.userId}`} 
+                  style={[styles.memberBadge, isProfitPayer ? styles.badgeProfit : styles.badgeUnselected]}
+                  onPress={() => toggleProfitPayer(member.user.id)}
+                >
+                  <Text style={[styles.memberText, isProfitPayer ? {color: '#d35400', fontWeight:'bold'} : styles.textUnselected]}>
+                    {isProfitPayer ? "💸 Chịu lãi" : "🙅 Miễn lãi"} - {member.user.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
       <View style={{marginTop: 30, marginBottom: 50}}>
         {loading ? (
           <ActivityIndicator size="large" color="blue" />
         ) : (
-          <Button title="LƯU CHI PHÍ" onPress={handleSave} />
+          <Button title="GỬI YÊU CẦU DUYỆT" onPress={handleSave} color="#28a745" />
         )}
       </View>
     </ScrollView>
@@ -183,15 +229,24 @@ const styles = StyleSheet.create({
   dateText: { fontSize: 16, color: '#333', fontWeight: 'bold' },
   
   // Style cho phần chọn thành viên
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', marginTop: 25, marginBottom: 10, color: '#007bff' },
+  sectionTitle: { fontSize: 18, fontWeight: 'bold', marginTop: 25, marginBottom: 5, color: '#007bff' },
+  hintText: { fontSize: 13, color: '#666', marginBottom: 10, fontStyle: 'italic' },
+  
   membersContainer: { flexDirection: 'row', flexWrap: 'wrap' },
   memberBadge: {
     paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20,
     marginRight: 10, marginBottom: 10, borderWidth: 1
   },
+  
+  // Style Gốc
   badgeSelected: { backgroundColor: '#e7f1ff', borderColor: '#007bff' },
+  textSelected: { color: '#007bff', fontWeight: 'bold' },
+  
+  // Style Lãi
+  badgeProfit: { backgroundColor: '#fadbd8', borderColor: '#e67e22' },
+  
+  // Style Chung
   badgeUnselected: { backgroundColor: '#f0f0f0', borderColor: '#ccc' },
   memberText: { fontSize: 14, fontWeight: '500' },
-  textSelected: { color: '#007bff', fontWeight: 'bold' },
   textUnselected: { color: '#777' }
 });
