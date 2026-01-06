@@ -18,13 +18,13 @@ model User {
   name      String?
   createdAt DateTime @default(now())
 
-  // Quan hệ: 1 User có thể tạo nhiều Group
+  // Quan hệ: 1 User có thể tạo nhiều Group (Đã đặt tên "GroupCreator")
   groupsCreated Group[] @relation("GroupCreator")
 
   // Quan hệ: 1 User có thể tham gia nhiều GroupMember
   memberships GroupMember[]
 
-  // Quan hệ: 1 User có thể trả nhiều Expense
+  // Quan hệ: 1 User có thể trả nhiều Expense (Đã đặt tên "ExpensePayer")
   expensesPaid Expense[] @relation("ExpensePayer")
 }
 
@@ -34,9 +34,9 @@ model Group {
   name      String
   createdAt DateTime @default(now())
 
-  // Quan hệ: 1 Group được tạo bởi 1 User
+  // Quan hệ: 1 Group được tạo bởi 1 User (Khớp tên "GroupCreator" với bảng User)
   creatorId Int
-  creator   User     @relation("GroupCreator", fields: [creatorId], references: [id])
+  creator   User   @relation("GroupCreator", fields: [creatorId], references: [id])
 
   // Quan hệ: 1 Group có nhiều GroupMember
   members GroupMember[]
@@ -61,18 +61,23 @@ model GroupMember {
   @@id([userId, groupId])
 }
 
-// Bảng lưu các khoản chi tiêu
+// Bảng lưu các khoản chi tiêu------------------------------------------
 model Expense {
   id          Int      @id @default(autoincrement())
   description String
-  amount      Float  @db.Decimal(10, 2) // Ví dụ: 12345678.99
+  amount      Float    // Số tiền
+  profit      Float    @default(0) // Tiền lời (nếu có)
+  
+  // --- QUAN TRỌNG: Cột Hạn Trả ---
+  dueDate     DateTime? 
+  
+  isConfirmed Boolean  @default(false)
   createdAt   DateTime @default(now())
-
-  // Quan hệ: 1 Expense được trả bởi 1 User
-  paidById Int
-  paidBy   User @relation("ExpensePayer", fields: [paidById], references: [id])
-
-  // Quan hệ: 1 Expense thuộc về 1 Group
-  groupId Int
-  group   Group @relation(fields: [groupId], references: [id])
+  
+  groupId     Int
+  group       Group    @relation(fields: [groupId], references: [id])
+  
+  paidById    Int
+  // ✅ ĐÃ SỬA: Thêm "ExpensePayer" vào đây để khớp với bảng User
+  paidBy      User     @relation("ExpensePayer", fields: [paidById], references: [id])
 }

@@ -157,17 +157,44 @@ fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, 
     } catch(err) { reply.status(500).send(err) }
 });
 
-// --- API EXPENSE Thêm - khoản chi tiêu mới (Tạo hóa đơn) ---9
+// --- API EXPENSE Thêm - khoản chi tiêu mới (Tạo hóa đơn) ---9------------------------------
+// 7. API TẠO CHI PHÍ (CÓ HẠN TRẢ VÀ BẢO MẬT)
+// Sửa app.post thành fastify.post
 fastify.post('/expenses', { onRequest: [authenticate] }, async (request, reply) => {
-    try {
-        const { description, amount, groupId, paidById } = request.body;
-        const newExpense = await prisma.expense.create({
-            data: { description, amount: parseFloat(amount), groupId, paidById }
-        });
-        reply.send(newExpense);
-    } catch(err) { reply.status(500).send(err) }
-});
+    // Lấy dữ liệu từ App gửi lên
+    const { description, amount, groupId, paidById, profit, dueDate } = request.body;
 
+    // 1. Kiểm tra dữ liệu đầu vào (Validation)
+    if (!description || !amount || !groupId || !paidById) {
+        return reply.code(400).send({ error: "Thiếu thông tin bắt buộc (Tên, Tiền, Nhóm, Người trả)" });
+    }
+
+    try {
+        // 2. Lưu vào Database
+        const expense = await prisma.expense.create({
+            data: {
+                description,
+                // Chuyển đổi số để tránh lỗi string
+                amount: parseFloat(amount),
+                groupId: parseInt(groupId),
+                paidById: parseInt(paidById),
+                profit: parseFloat(profit) || 0,
+                
+                // Xử lý ngày tháng: Nếu có gửi lên thì đổi sang dạng Date, không thì null
+                dueDate: dueDate ? new Date(dueDate) : null,
+                
+                isConfirmed: false 
+            }
+        });
+        
+        // 3. Trả kết quả về cho App
+        return reply.send(expense);
+
+    } catch (error) {
+        console.error("Lỗi thêm chi phí:", error);
+        return reply.code(500).send({ error: "Lỗi server: Không thể lưu chi phí này" });
+    }
+});
 
 
 
@@ -207,25 +234,51 @@ fastify.delete('/expenses/:id', { onRequest: [authenticate] }, async (request, r
   }
 });
 
-// === API SỬA CHI PHÍ ===  11
+// === API SỬA CHI PHÍ ===  11------------------------------------------------
+// API SỬA CHI PHÍ (CÓ BẢO MẬT: CHÍNH CHỦ MỚI ĐƯỢC SỬA)
 fastify.put('/expenses/:id', { onRequest: [authenticate] }, async (request, reply) => {
-  try {
-    const expenseId = parseInt(request.params.id);
-    const { description, amount } = request.body;
+    const { id } = request.params;
+    const { description, amount, profit, dueDate } = request.body;
+    
+    // Lấy ID của người đang thực hiện thao tác này (từ Token đăng nhập)
+    const currentUserId = request.user.id; 
 
-    // Cập nhật vào Database
-    const updatedExpense = await prisma.expense.update({
-      where: { id: expenseId },
-      data: {
-        description: description,
-        amount: parseFloat(amount) // Đảm bảo lưu số thực
-      }
-    });
+    try {
+        // BƯỚC 1: Tìm xem khoản chi này có tồn tại không và ai là chủ
+        const existingExpense = await prisma.expense.findUnique({
+            where: { id: parseInt(id) }
+        });
 
-    reply.send(updatedExpense);
-  } catch (err) {
-    reply.status(500).send({ message: "Lỗi không thể sửa chi phí" });
-  }
+        if (!existingExpense) {
+            return reply.code(404).send({ error: "Khoản chi không tồn tại" });
+        }
+
+        // BƯỚC 2: Kiểm tra quyền sở hữu (Quan trọng nhất)
+        // Nếu người tạo (paidById) KHÁC với người đang sửa (currentUserId) -> Chặn ngay
+        if (existingExpense.paidById !== currentUserId) {
+            return reply.code(403).send({ 
+                error: "Bạn không có quyền sửa khoản chi của người khác!" 
+            });
+        }
+
+        // BƯỚC 3: Nếu là chính chủ thì mới cho cập nhật
+        const updatedExpense = await prisma.expense.update({
+            where: { id: parseInt(id) },
+            data: {
+                description,
+                amount: parseFloat(amount),
+                profit: parseFloat(profit) || 0,
+                // Xử lý ngày tháng
+                dueDate: dueDate ? new Date(dueDate) : null 
+            }
+        });
+
+        return reply.send(updatedExpense);
+
+    } catch (error) {
+        console.error("Lỗi sửa chi phí:", error);
+        return reply.code(500).send({ error: "Lỗi server" });
+    }
 });
 
 // === API XÓA NHÓM (Có kiểm tra điều kiện) ===  12
