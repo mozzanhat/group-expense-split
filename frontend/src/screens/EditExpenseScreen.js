@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   View, Text, TextInput, Button, StyleSheet, Alert, 
-  ActivityIndicator, TouchableOpacity, ScrollView, Platform 
+  ActivityIndicator, TouchableOpacity, ScrollView 
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker'; 
 import api from '../api';
@@ -10,20 +10,65 @@ export default function EditExpenseScreen({ route, navigation }) {
   // Lấy dữ liệu cũ từ màn hình danh sách
   const { expense } = route.params; 
 
+  // State cho form
   const [description, setDescription] = useState(expense.description);
   const [amount, setAmount] = useState(expense.amount.toString());
-  
-  // Xử lý Lãi và Ngày (Nếu không có thì để mặc định)
   const [profit, setProfit] = useState(expense.profit ? expense.profit.toString() : '');
   const [dueDate, setDueDate] = useState(expense.dueDate ? new Date(expense.dueDate) : new Date());
   
   const [loading, setLoading] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
+  // --- STATE MỚI: Danh sách thành viên & Người được chọn ---
+  const [members, setMembers] = useState([]);
+  const [involvedUserIds, setInvolvedUserIds] = useState([]); 
+
+  // 1. Chạy ngay khi mở màn hình: Tải thành viên & Khôi phục danh sách cũ
+  useEffect(() => {
+    fetchGroupInfo();
+  }, []);
+
+  const fetchGroupInfo = async () => {
+    try {
+      // Gọi API lấy danh sách thành viên của nhóm hiện tại
+      const response = await api.get(`/groups/${expense.groupId}`);
+      const groupMembers = response.data.members || [];
+      setMembers(groupMembers);
+
+      // Khôi phục những người đã được chọn trước đó
+      // (Dựa vào mảng 'splits' có sẵn trong expense)
+      if (expense.splits && Array.isArray(expense.splits)) {
+        const existingIds = expense.splits.map(split => split.userId);
+        setInvolvedUserIds(existingIds);
+      } else {
+        // Nếu dữ liệu cũ không có splits, mặc định chọn tất cả (để an toàn)
+        setInvolvedUserIds(groupMembers.map(m => m.user.id));
+      }
+
+    } catch (error) {
+      console.error("Lỗi tải thông tin nhóm:", error);
+      Alert.alert("Lỗi", "Không thể tải danh sách thành viên");
+    }
+  };
+
+  // Hàm chọn/bỏ chọn người (Copy từ AddExpenseScreen)
+  const toggleUserSelection = (userId) => {
+    if (involvedUserIds.includes(userId)) {
+      setInvolvedUserIds(involvedUserIds.filter(id => id !== userId));
+    } else {
+      setInvolvedUserIds([...involvedUserIds, userId]);
+    }
+  };
+
   const handleUpdate = async () => {
-    // 1. Kiểm tra nhập liệu
+    // Kiểm tra nhập liệu
     if (!description || !amount) {
       Alert.alert("Thiếu thông tin", "Vui lòng nhập tên và số tiền!");
+      return;
+    }
+
+    if (involvedUserIds.length === 0) {
+      Alert.alert("Lỗi", "Phải chọn ít nhất 1 người chịu tiền!");
       return;
     }
 
@@ -34,7 +79,10 @@ export default function EditExpenseScreen({ route, navigation }) {
         description: description,
         amount: parseFloat(amount),
         profit: parseFloat(profit) || 0, 
-        dueDate: dueDate.toISOString()    
+        dueDate: dueDate.toISOString(),
+        
+        // Gửi danh sách người chịu tiền mới
+        involvedUserIds: involvedUserIds
       });
       
       Alert.alert("Thành công", "Đã cập nhật chi phí!");
@@ -43,19 +91,13 @@ export default function EditExpenseScreen({ route, navigation }) {
     } catch (error) {
       console.error("Lỗi update:", error);
       
-      // 3. XỬ LÝ LỖI THÔNG MINH (PHẦN QUAN TRỌNG NHẤT)
+      // Xử lý lỗi thông minh
       if (error.response) {
-        // Nếu Server có trả về phản hồi (ví dụ: lỗi 403, 404, 500)
-        // Ta lấy tin nhắn cụ thể trong biến "error" mà backend gửi sang
         const serverMessage = error.response.data?.error || "Có lỗi xảy ra từ phía Server";
-        
-        // Hiện thông báo đúng nội dung đó (Ví dụ: "Bạn không có quyền sửa...")
         Alert.alert("Không thể sửa", serverMessage);
       } else if (error.request) {
-        // Lỗi không nhận được phản hồi (thường do mất mạng hoặc sai IP)
-        Alert.alert("Lỗi kết nối", "Không thể kết nối đến Server. Vui lòng kiểm tra Wifi/4G.");
+        Alert.alert("Lỗi kết nối", "Kiểm tra mạng Wifi/4G.");
       } else {
-        // Lỗi khác
         Alert.alert("Lỗi", "Đã có lỗi không xác định xảy ra.");
       }
     } finally {
@@ -108,7 +150,6 @@ export default function EditExpenseScreen({ route, navigation }) {
         </Text>
       </TouchableOpacity>
 
-      {/* Hiển thị lịch chọn ngày */}
       {showDatePicker && (
         <DateTimePicker
           value={dueDate}
@@ -118,7 +159,26 @@ export default function EditExpenseScreen({ route, navigation }) {
         />
       )}
 
-      <View style={{ marginTop: 30 }}>
+      {/* --- PHẦN MỚI: CHỌN NGƯỜI CHIA TIỀN --- */}
+      <Text style={styles.sectionTitle}>Chia cho ai? (Sửa đổi)</Text>
+      <View style={styles.membersContainer}>
+        {members.map((member) => {
+          const isSelected = involvedUserIds.includes(member.user.id);
+          return (
+            <TouchableOpacity 
+              key={member.userId} 
+              style={[styles.memberBadge, isSelected ? styles.badgeSelected : styles.badgeUnselected]}
+              onPress={() => toggleUserSelection(member.user.id)}
+            >
+              <Text style={[styles.memberText, isSelected ? styles.textSelected : styles.textUnselected]}>
+                {isSelected ? "☑️ " : "⬜ "} {member.user.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={{ marginTop: 30, marginBottom: 50 }}>
         {loading ? (
           <ActivityIndicator size="large" color="blue" />
         ) : (
@@ -148,5 +208,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#ccc'
   },
-  dateText: { fontSize: 16, fontWeight: 'bold', color: '#333' }
+  dateText: { fontSize: 16, fontWeight: 'bold', color: '#333' },
+
+  // Style cho phần chọn thành viên
+  sectionTitle: { fontSize: 18, fontWeight: 'bold', marginTop: 25, marginBottom: 10, color: '#007bff' },
+  membersContainer: { flexDirection: 'row', flexWrap: 'wrap' },
+  memberBadge: {
+    paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20,
+    marginRight: 10, marginBottom: 10, borderWidth: 1
+  },
+  badgeSelected: { backgroundColor: '#e7f1ff', borderColor: '#007bff' },
+  badgeUnselected: { backgroundColor: '#f0f0f0', borderColor: '#ccc' },
+  memberText: { fontSize: 14, fontWeight: '500' },
+  textSelected: { color: '#007bff', fontWeight: 'bold' },
+  textUnselected: { color: '#777' }
 });

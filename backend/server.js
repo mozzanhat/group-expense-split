@@ -119,75 +119,137 @@ fastify.post('/groups/:id/members', { onRequest: [authenticate] }, async (reques
     } catch(err) { reply.status(500).send(err) }
 });
 
-// backend/server.js  8 Tính toán số nợ trong nhóm
+// backend/server.js  8 Tính toán số nợ trong nhóm------------------------------------
 fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, reply) => {
     try {
         const groupId = parseInt(request.params.id);
-        const members = await prisma.groupMember.findMany({ where: { groupId }, include: { user: true } });
-        const expenses = await prisma.expense.findMany({ where: { groupId } });
 
-        let total = 0; // Tổng chi phí trong nhóm
-        const balances = {};// Đối tượng lưu số tiền đã trả và số dư của mỗi thành viên
+        const members = await prisma.groupMember.findMany({ 
+            where: { groupId }, include: { user: true } 
+        });
 
-        members.forEach(m => balances[m.userId] = { name: m.user.name, paid: 0, balance: 0 }); 
+        // Lấy chi phí và sắp xếp theo ngày (để dễ theo dõi)
+        const expenses = await prisma.expense.findMany({ 
+            where: { groupId },
+            include: { splits: true },
+            orderBy: { createdAt: 'asc' }
+        });
+
+        let totalGroupSpend = 0; 
+        const balances = {}; 
+
+        members.forEach(m => {
+            balances[m.userId] = { 
+                name: m.user.name, 
+                paid: 0, owe: 0, 
+            };
+        });
 
         expenses.forEach(e => {
-            if(balances[e.paidById]) {
-                balances[e.paidById].paid += e.amount;
+            const amount = parseFloat(e.amount);
+            const payerId = e.paidById; // Người chi tiền (Người trả nợ)
+            
+            // 1. Kiểm tra xem có phải là trả nợ không
+            const isDebtPayment = e.description.toLowerCase().includes("trả nợ") 
+                               || e.description.toLowerCase().includes("thanh toán");
+
+            // 🔥 LOGIC QUAN TRỌNG NHẤT:
+            // Nếu là "Trả nợ" mà CHƯA XÁC NHẬN (isConfirmed == false) 
+            // -> Bỏ qua ngay, coi như chưa trả, nợ vẫn y nguyên.
+            if (isDebtPayment && !e.isConfirmed) {
+                return; 
             }
 
-            const isDebtPayment = e.description.includes("Trả nợ") || e.description.includes("Thanh toán");
-            
+            // 2. Nếu không phải trả nợ (là chi tiêu nhóm) -> Cộng vào tổng
             if (!isDebtPayment) {
-                total += parseFloat(e.amount); 
+                totalGroupSpend += amount;
+            }
+
+            // 3. Tính toán Ví (Chỉ chạy xuống đây nếu đã xác nhận hoặc là chi tiêu thường)
+            
+            // Người chi tiền (Đã trả)
+            if (balances[payerId]) {
+                balances[payerId].paid += amount;
+            }
+
+            // Người thụ hưởng (Đã nhận)
+            const splitUsers = e.splits; 
+            if (splitUsers.length > 0) {
+                const sharePerPerson = amount / splitUsers.length;
+                splitUsers.forEach(split => {
+                    const uid = split.userId;
+                    if (balances[uid]) {
+                        balances[uid].owe += sharePerPerson;
+                    }
+                });
+            } else {
+                if (balances[payerId]) balances[payerId].owe += amount;
             }
         });
 
-        const share = members.length ? total / members.length : 0;
-        
-        const debts = Object.keys(balances).map(uid => ({
-            userId: parseInt(uid), 
-            name: balances[uid].name, 
-            paid: balances[uid].paid, 
-            balance: balances[uid].paid - share
-        }));
+        const debts = Object.keys(balances).map(uid => {
+            const userBalance = balances[uid];
+            return {
+                userId: parseInt(uid),
+                name: userBalance.name,
+                paid: userBalance.paid,
+                spent: userBalance.owe, 
+                balance: userBalance.paid - userBalance.owe 
+            };
+        });
 
-        reply.send({ total, sharePerPerson: share, debts }); 
+        reply.send({ total: totalGroupSpend, debts });
 
-    } catch(err) { reply.status(500).send(err) }
+    } catch (err) {
+        console.error(err);
+        reply.status(500).send(err);
+    }
 });
 
 // --- API EXPENSE Thêm - khoản chi tiêu mới (Tạo hóa đơn) ---9------------------------------
 // 7. API TẠO CHI PHÍ (CÓ HẠN TRẢ VÀ BẢO MẬT)
 // Sửa app.post thành fastify.post
+// 7. API TẠO CHI PHÍ (CÓ CHỌN NGƯỜI CHIA TIỀN)
 fastify.post('/expenses', { onRequest: [authenticate] }, async (request, reply) => {
-    // Lấy dữ liệu từ App gửi lên
-    const { description, amount, groupId, paidById, profit, dueDate } = request.body;
+    // Nhận thêm involvedUserIds: Là mảng chứa ID những người phải trả tiền
+    // Ví dụ gửi lên: { ..., "involvedUserIds": [1, 3] }
+    const { description, amount, groupId, paidById, profit, dueDate, involvedUserIds } = request.body;
 
-    // 1. Kiểm tra dữ liệu đầu vào (Validation)
+    // 1. Kiểm tra dữ liệu đầu vào
     if (!description || !amount || !groupId || !paidById) {
-        return reply.code(400).send({ error: "Thiếu thông tin bắt buộc (Tên, Tiền, Nhóm, Người trả)" });
+        return reply.code(400).send({ error: "Thiếu thông tin bắt buộc" });
+    }
+
+    // Kiểm tra xem có chọn người chia tiền không
+    if (!involvedUserIds || !Array.isArray(involvedUserIds) || involvedUserIds.length === 0) {
+        return reply.code(400).send({ error: "Phải chọn ít nhất 1 người để chia tiền" });
     }
 
     try {
-        // 2. Lưu vào Database
+        // 2. Lưu vào Database (Dùng Transaction lồng nhau của Prisma)
         const expense = await prisma.expense.create({
             data: {
                 description,
-                // Chuyển đổi số để tránh lỗi string
                 amount: parseFloat(amount),
                 groupId: parseInt(groupId),
                 paidById: parseInt(paidById),
                 profit: parseFloat(profit) || 0,
-                
-                // Xử lý ngày tháng: Nếu có gửi lên thì đổi sang dạng Date, không thì null
                 dueDate: dueDate ? new Date(dueDate) : null,
+                isConfirmed: false,
                 
-                isConfirmed: false 
+                // ✅ QUAN TRỌNG: Lưu danh sách người được chọn vào bảng ExpenseSplit
+                splits: {
+                    create: involvedUserIds.map(uid => ({
+                        userId: parseInt(uid)
+                    }))
+                }
+            },
+            // Trả về kèm danh sách người chia tiền để frontend hiển thị nếu cần
+            include: {
+                splits: true 
             }
         });
         
-        // 3. Trả kết quả về cho App
         return reply.send(expense);
 
     } catch (error) {
@@ -350,6 +412,90 @@ fastify.put('/groups/:id', { onRequest: [authenticate] }, async (req, reply) => 
     } catch (err) {
         console.error(err);
         reply.status(500).send({ message: 'Lỗi server' });
+    }
+});
+
+// API XÁC NHẬN ĐÃ NHẬN TIỀN (CONFIRM)--------------------------------------------
+fastify.put('/expenses/:id/confirm', { onRequest: [authenticate] }, async (request, reply) => {
+    const { id } = request.params;
+    const currentUserId = request.user.id; // Người đang bấm nút
+
+    try {
+        // 1. Tìm khoản chi và danh sách người thụ hưởng
+        const expense = await prisma.expense.findUnique({
+            where: { id: parseInt(id) },
+            include: { splits: true }
+        });
+
+        if (!expense) return reply.code(404).send({ error: "Không tìm thấy khoản chi" });
+
+        // 2. Kiểm tra quyền xác nhận
+        // Chỉ có người "được nhận tiền" (nằm trong splits) mới có quyền xác nhận
+        // Ví dụ: A trả nợ cho B. Splits = [B]. Thì chỉ B mới được bấm Confirm.
+        const isReceiver = expense.splits.some(s => s.userId === currentUserId);
+        const isCreator = expense.paidById === currentUserId;
+
+        // Cho phép Người nhận tiền HOẶC Admin nhóm (nếu có logic admin) xác nhận.
+        // Ở đây mình cho phép Người thụ hưởng (Receiver) xác nhận.
+        if (!isReceiver) {
+            return reply.code(403).send({ error: "Bạn không phải người nhận tiền, bạn không thể xác nhận!" });
+        }
+
+        // 3. Cập nhật trạng thái
+        const updated = await prisma.expense.update({
+            where: { id: parseInt(id) },
+            data: { isConfirmed: true }
+        });
+
+        return reply.send({ message: "Đã xác nhận thanh toán thành công!", data: updated });
+
+    } catch (error) {
+        console.error(error);
+        return reply.code(500).send({ error: "Lỗi server" });
+    }
+});
+
+// API: THANH TOÁN NHANH (Người nhận tiền xác nhận người nợ đã trả)--------------------
+fastify.post('/groups/:id/settle', { onRequest: [authenticate] }, async (request, reply) => {
+    const groupId = parseInt(request.params.id);
+    // debtorId: ID người trả nợ (Người đưa tiền)
+    // amount: Số tiền đã trả
+    const { debtorId, amount } = request.body; 
+    
+    // Người đang thao tác chính là Người nhận tiền (receiver)
+    const receiverId = request.user.id; 
+
+    if (!debtorId || !amount) {
+        return reply.code(400).send({ error: "Thiếu thông tin người trả hoặc số tiền" });
+    }
+
+    try {
+        // Tìm tên người trả nợ để lưu vào mô tả cho đẹp
+        const debtor = await prisma.user.findUnique({ where: { id: debtorId } });
+        const debtorName = debtor ? debtor.name : "Thành viên";
+
+        // TẠO KHOẢN TRẢ NỢ VÀ XÁC NHẬN LUÔN (isConfirmed: true)
+        const settlement = await prisma.expense.create({
+            data: {
+                description: `Trả nợ cho ${request.user.name }`, // Ví dụ: Trả nợ cho Admin
+                amount: parseFloat(amount),
+                groupId: groupId,
+                paidById: parseInt(debtorId), // Người chi là Người nợ
+                profit: 0,
+                isConfirmed: true, // <--- QUAN TRỌNG: Xác nhận luôn
+                
+                // Người thụ hưởng là Chính mình (Người đang bấm nút)
+                splits: {
+                    create: [{ userId: receiverId }]
+                }
+            }
+        });
+
+        return reply.send({ message: "Đã cập nhật công nợ thành công!", data: settlement });
+
+    } catch (error) {
+        console.error(error);
+        return reply.code(500).send({ error: "Lỗi server khi thanh toán" });
     }
 });
 

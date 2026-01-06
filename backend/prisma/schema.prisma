@@ -26,6 +26,7 @@ model User {
 
   // Quan hệ: 1 User có thể trả nhiều Expense (Đã đặt tên "ExpensePayer")
   expensesPaid Expense[] @relation("ExpensePayer")
+  expenseSplits ExpenseSplit[]
 }
 
 // Bảng lưu thông tin nhóm
@@ -62,15 +63,14 @@ model GroupMember {
 }
 
 // Bảng lưu các khoản chi tiêu------------------------------------------
+// ... Các model User, Group giữ nguyên ...
+
 model Expense {
   id          Int      @id @default(autoincrement())
   description String
-  amount      Float    // Số tiền
-  profit      Float    @default(0) // Tiền lời (nếu có)
-  
-  // --- QUAN TRỌNG: Cột Hạn Trả ---
-  dueDate     DateTime? 
-  
+  amount      Float
+  profit      Float    @default(0)
+  dueDate     DateTime?
   isConfirmed Boolean  @default(false)
   createdAt   DateTime @default(now())
   
@@ -78,6 +78,19 @@ model Expense {
   group       Group    @relation(fields: [groupId], references: [id])
   
   paidById    Int
-  // ✅ ĐÃ SỬA: Thêm "ExpensePayer" vào đây để khớp với bảng User
   paidBy      User     @relation("ExpensePayer", fields: [paidById], references: [id])
+
+  // QUAN TRỌNG: Mối quan hệ với bảng chia tiền mới
+  splits      ExpenseSplit[] 
+}
+
+// BẢNG MỚI: Lưu danh sách những người phải trả tiền cho khoản chi đó
+model ExpenseSplit {
+  expenseId Int
+  expense   Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  
+  userId    Int
+  user      User    @relation(fields: [userId], references: [id])
+
+  @@id([expenseId, userId]) // Khóa chính kép
 }
