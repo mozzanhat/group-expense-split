@@ -121,7 +121,7 @@ export default function AddExpenseScreen({ route, navigation }) {
   return (
     <ScrollView style={styles.container}>
       {/* --- PHẦN 1: NHẬP THÔNG TIN CƠ BẢN --- */}
-      <Text style={styles.label}>Tên khoản chi (Ví dụ: Bia, Mồi...)</Text>
+      <Text style={styles.label}>Tên khoản chi</Text>
       <TextInput 
         style={styles.input} 
         value={description} 

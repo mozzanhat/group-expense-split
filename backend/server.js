@@ -121,84 +121,146 @@ fastify.post('/groups/:id/members', { onRequest: [authenticate] }, async (reques
 
 // backend/server.js  8 Tính toán số nợ trong nhóm------------------------------------
 // 3. CẬP NHẬT API TÍNH NỢ (Logic chia tiền lãi + Chỉ tính hàng chính)
+// API LẤY CÔNG NỢ (NÂNG CẤP: Tách Chi Gốc/Đã Nhận & Ghép cặp nợ)
+// API LẤY CÔNG NỢ (LOGIC: SONG PHƯƠNG - AI NỢ AI GHI RÕ)
+// 3. CẬP NHẬT API GET DEBTS (Trả về thông tin Pending Settlement)
 fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, reply) => {
     try {
         const groupId = parseInt(request.params.id);
+        // ... (Giữ nguyên phần lấy members)
         const members = await prisma.groupMember.findMany({ where: { groupId }, include: { user: true } });
-        
-        // Lấy các khoản chi ĐÃ DUYỆT (Hàng chính)
+
+        // Lấy danh sách expenses (Giữ nguyên)
         const expenses = await prisma.expense.findMany({ 
-            where: { 
-                groupId,
-                isApproved: true // CHỈ LẤY HÀNG CHÍNH
-            },
-            include: { splits: true } 
+            where: { groupId, isApproved: true },
+            include: { splits: true },
+            orderBy: { createdAt: 'asc' }
         });
 
-        // Lấy danh sách HÀNG CHỜ để hiển thị thông báo (nếu cần)
+        // Lấy Hàng chờ (Giữ nguyên)
         const pendingExpenses = await prisma.expense.findMany({
             where: { groupId, isApproved: false },
-            include: { splits: true }
+            include: { splits: true, paidBy: true }
         });
 
+        // --- BIẾN MỚI: LƯU CÁC KHOẢN ĐANG CHỜ XÁC NHẬN GIỮA 2 NGƯỜI ---
+        // Key: "debtorId-creditorId", Value: { expenseId, amount }
+        const pendingSettlements = {}; 
+
         let totalGroupSpend = 0; 
-        const balances = {}; 
-        members.forEach(m => balances[m.userId] = { name: m.user.name, paid: 0, owe: 0 });
+        const debtMap = {}; 
+        const userStats = {}; 
+        // ... (Giữ nguyên phần khởi tạo userStats)
+        members.forEach(m => {
+            userStats[m.userId] = { id: m.userId, name: m.user.name, paidOriginal: 0, received: 0 };
+        });
+
+        // Helper addDebt (Giữ nguyên)
+        const addDebt = (fromId, toId, amount, date) => {
+             const key = `${fromId}-${toId}`;
+             if (!debtMap[key]) debtMap[key] = { amount: 0, earliestDueDate: null };
+             debtMap[key].amount += amount;
+             if (date) {
+                const currentDue = debtMap[key].earliestDueDate;
+                if (!currentDue || new Date(date) < new Date(currentDue)) debtMap[key].earliestDueDate = date;
+             }
+        };
 
         expenses.forEach(e => {
             const amount = parseFloat(e.amount);
-            const profit = parseFloat(e.profit);
             const payerId = e.paidById;
-            
-            // Bỏ qua khoản trả nợ chưa xác nhận (Logic cũ)
-            const isDebtPayment = e.description.toLowerCase().includes("trả nợ");
-            if (isDebtPayment && !e.isConfirmed) return;
+            const isSettlement = e.description.toLowerCase().includes("trả nợ") || e.isConfirmed === true; // Logic nhận diện trả nợ
 
-            if (!isDebtPayment) totalGroupSpend += amount;
+            // NẾU LÀ TRẢ NỢ
+            if (isSettlement) {
+                // TRƯỜNG HỢP 1: Đã xác nhận -> Trừ nợ (Logic cũ)
+                if (e.isConfirmed) {
+                    e.splits.forEach(s => {
+                        const key = `${payerId}-${s.userId}`;
+                        if (debtMap[key]) debtMap[key].amount -= amount;
+                        if (userStats[s.userId]) userStats[s.userId].received += amount;
+                    });
+                } 
+                // TRƯỜNG HỢP 2: CHƯA xác nhận (isConfirmed = false) -> Lưu vào pendingSettlements
+                else {
+                    e.splits.forEach(s => {
+                        // Key: Người trả - Người nhận
+                        const key = `${payerId}-${s.userId}`;
+                        // Lưu lại để Frontend biết mà hiện nút
+                        pendingSettlements[key] = {
+                            expenseId: e.id,
+                            amount: amount
+                        };
+                    });
+                }
+                return;
+            }
 
-            // 1. Tính tiền GỐC
-            if (balances[payerId]) balances[payerId].paid += amount;
-            
+            // ... (Logic tính chi tiêu thường giữ nguyên y hệt code cũ)
+            totalGroupSpend += amount;
+            if (userStats[payerId]) userStats[payerId].paidOriginal += amount;
             const splitUsers = e.splits;
             if (splitUsers.length > 0) {
                 const shareBase = amount / splitUsers.length;
                 splitUsers.forEach(split => {
-                    if (balances[split.userId]) balances[split.userId].owe += shareBase;
+                    let debtAmount = shareBase;
+                    if (split.paysProfit && e.profit > 0) {
+                        const profitPayers = splitUsers.filter(s => s.paysProfit).length;
+                        debtAmount += (e.profit / profitPayers);
+                    }
+                    addDebt(split.userId, payerId, debtAmount, e.dueDate);
                 });
-            } else {
-                if (balances[payerId]) balances[payerId].owe += amount;
-            }
-
-            // 2. Tính tiền LÃI (Chỉ chia cho những người có paysProfit = true)
-            if (profit > 0 && balances[payerId]) {
-                 // Người trả được cộng thêm phần lãi vào "Đã chi" (vì họ ứng trước hoặc được hưởng)
-                 // Lưu ý: Logic tiền lãi hơi trừu tượng. 
-                 // Ở đây hiểu là: Payer bỏ ra (Gốc + Lãi) hay Payer muốn thu về (Gốc + Lãi)?
-                 // Thường là Payer muốn thu về Lãi. Nên coi như Payer đã "paid" phần lãi đó.
-                 balances[payerId].paid += profit;
-
-                 const profitPayers = splitUsers.filter(s => s.paysProfit);
-                 if (profitPayers.length > 0) {
-                     const shareProfit = profit / profitPayers.length;
-                     profitPayers.forEach(p => {
-                         if (balances[p.userId]) balances[p.userId].owe += shareProfit;
-                     });
-                 }
             }
         });
 
-        const debts = Object.keys(balances).map(uid => ({
-            userId: parseInt(uid),
-            name: balances[uid].name,
-            paid: balances[uid].paid,
-            spent: balances[uid].owe, 
-            balance: balances[uid].paid - balances[uid].owe 
-        }));
+        // Tổng hợp dữ liệu (Thêm pendingSettlements vào từng dòng nợ)
+        const finalData = members.map(m => {
+            const uid = m.userId;
+            
+            const iOwe = [];
+            members.forEach(other => {
+                const key = `${uid}-${other.userId}`;
+                if (debtMap[key] && debtMap[key].amount > 100) { 
+                    iOwe.push({
+                        toId: other.userId,
+                        toName: other.user.name,
+                        amount: debtMap[key].amount,
+                        dueDate: debtMap[key].earliestDueDate,
+                        // Kiểm tra xem có đang chờ xác nhận không
+                        pending: pendingSettlements[`${uid}-${other.userId}`] || null 
+                    });
+                }
+            });
 
-        // Trả về cả pendingExpenses để Frontend biết có hàng chờ
-        reply.send({ total: totalGroupSpend, debts, pendingCount: pendingExpenses.length, pendingExpenses });
+            const owesMe = [];
+            members.forEach(other => {
+                const key = `${other.userId}-${uid}`;
+                if (debtMap[key] && debtMap[key].amount > 100) {
+                    owesMe.push({
+                        fromId: other.userId,
+                        fromName: other.user.name,
+                        amount: debtMap[key].amount,
+                        dueDate: debtMap[key].earliestDueDate,
+                        // Kiểm tra xem họ có báo trả mình chưa
+                        pending: pendingSettlements[`${other.userId}-${uid}`] || null
+                    });
+                }
+            });
+
+            return {
+                userId: uid,
+                name: m.user.name,
+                paidOriginal: userStats[uid].paidOriginal,
+                received: userStats[uid].received,
+                debts: iOwe,
+                credits: owesMe
+            };
+        });
+
+        reply.send({ total: totalGroupSpend, debts: finalData, pendingExpenses });
 
     } catch (err) {
+        console.error(err);
         reply.status(500).send(err);
     }
 });
@@ -424,6 +486,7 @@ fastify.delete('/groups/:id', { onRequest: [authenticate] }, async (req, reply) 
     } catch (err) {
         console.error(err);
         reply.status(500).send({ message: 'Lỗi server' });
+
     }
 });
 
@@ -498,37 +561,45 @@ fastify.put('/expenses/:id/confirm', { onRequest: [authenticate] }, async (reque
 });
 
 // API: THANH TOÁN NHANH (Người nhận tiền xác nhận người nợ đã trả)--------------------
+// API: THANH TOÁN NHANH (Người nhận tiền xác nhận người nợ đã trả)
 fastify.post('/groups/:id/settle', { onRequest: [authenticate] }, async (request, reply) => {
     const groupId = parseInt(request.params.id);
-    // debtorId: ID người trả nợ (Người đưa tiền)
-    // amount: Số tiền đã trả
     const { debtorId, amount } = request.body; 
-    
-    // Người đang thao tác chính là Người nhận tiền (receiver)
-    const receiverId = request.user.id; 
+    const receiverId = request.user.id; // ID người đang bấm nút
 
     if (!debtorId || !amount) {
         return reply.code(400).send({ error: "Thiếu thông tin người trả hoặc số tiền" });
     }
 
     try {
-        // Tìm tên người trả nợ để lưu vào mô tả cho đẹp
-        const debtor = await prisma.user.findUnique({ where: { id: debtorId } });
-        const debtorName = debtor ? debtor.name : "Thành viên";
+        // ✅ SỬA LỖI TẠI ĐÂY:
+        // Lấy thông tin cả Người trả (Debtor) và Người nhận (Receiver/User hiện tại)
+        const [debtor, receiver] = await prisma.$transaction([
+            prisma.user.findUnique({ where: { id: parseInt(debtorId) } }),
+            prisma.user.findUnique({ where: { id: receiverId } })
+        ]);
 
-        // TẠO KHOẢN TRẢ NỢ VÀ XÁC NHẬN LUÔN (isConfirmed: true)
+        const debtorName = debtor ? debtor.name : "Thành viên";
+        const receiverName = receiver ? receiver.name : "bạn"; // Lấy tên thật từ DB
+
+        // TẠO KHOẢN TRẢ NỢ
         const settlement = await prisma.expense.create({
             data: {
-                description: `Trả nợ cho ${request.user.name }`, // Ví dụ: Trả nợ cho Admin
+                // ✅ Dùng receiverName vừa lấy từ DB
+                description: `Trả nợ cho ${receiverName}`, 
                 amount: parseFloat(amount),
                 groupId: groupId,
-                paidById: parseInt(debtorId), // Người chi là Người nợ
+                paidById: parseInt(debtorId),
                 profit: 0,
-                isConfirmed: true, // <--- QUAN TRỌNG: Xác nhận luôn
+                isConfirmed: true, 
+                // Mặc định là Approved (Hàng chính) luôn vì đây là xác nhận thanh toán
+                isApproved: true, 
                 
-                // Người thụ hưởng là Chính mình (Người đang bấm nút)
                 splits: {
-                    create: [{ userId: receiverId }]
+                    create: [{ 
+                        userId: receiverId,
+                        hasApproved: true // Người nhận tự tạo nên coi như đã duyệt
+                    }]
                 }
             }
         });
@@ -540,6 +611,48 @@ fastify.post('/groups/:id/settle', { onRequest: [authenticate] }, async (request
         return reply.code(500).send({ error: "Lỗi server khi thanh toán" });
     }
 });
+
+// 1. API: NGƯỜI NỢ BÁO ĐÃ TRẢ (Tạo khoản nợ chờ xác nhận)
+fastify.post('/groups/:id/notify-payment', { onRequest: [authenticate] }, async (request, reply) => {
+    const groupId = parseInt(request.params.id);
+    const { creditorId, amount } = request.body; // Trả cho ai, bao nhiêu
+    const debtorId = request.user.id; // Người đang bấm nút
+
+    try {
+        const creditor = await prisma.user.findUnique({ where: { id: creditorId } });
+        
+        // Tạo khoản chi nhưng chưa Confirm
+        await prisma.expense.create({
+            data: {
+                description: `Trả nợ cho ${creditor.name}`,
+                amount: parseFloat(amount),
+                groupId: groupId,
+                paidById: debtorId, 
+                profit: 0,
+                isConfirmed: false, // <--- QUAN TRỌNG: Chờ người nhận xác nhận
+                isApproved: true,   // Hàng chính (không cần vote)
+                splits: {
+                    create: [{ userId: creditorId, hasApproved: true }]
+                }
+            }
+        });
+
+        return reply.send({ message: "Đã gửi thông báo trả nợ!" });
+    } catch (error) {
+        console.error(error);
+        return reply.code(500).send({ error: "Lỗi server" });
+    }
+});
+
+// 2. API: TỪ CHỐI THANH TOÁN (Xóa khoản chờ)
+fastify.post('/expenses/:id/reject', { onRequest: [authenticate] }, async (request, reply) => {
+    const expenseId = parseInt(request.params.id);
+    // Logic: Xóa khoản chi này đi
+    await prisma.expense.delete({ where: { id: expenseId } });
+    return reply.send({ message: "Đã từ chối thanh toán" });
+});
+
+
 
 // Khởi động server
 const start = async () => {
@@ -554,5 +667,7 @@ const start = async () => {
 
 
 
+
+//new 1.1.1
 
 start();
