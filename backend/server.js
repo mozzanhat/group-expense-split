@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 
 const prisma = new PrismaClient();
 
+
 // 1. Cấu hình CORS
 fastify.register(require('@fastify/cors'), { origin: "*" });
 
@@ -120,113 +121,136 @@ fastify.post('/groups/:id/members', { onRequest: [authenticate] }, async (reques
 });
 
 // backend/server.js  8 Tính toán số nợ trong nhóm------------------------------------
-// 3. CẬP NHẬT API TÍNH NỢ (Logic chia tiền lãi + Chỉ tính hàng chính)
-// API LẤY CÔNG NỢ (NÂNG CẤP: Tách Chi Gốc/Đã Nhận & Ghép cặp nợ)
-// API LẤY CÔNG NỢ (LOGIC: SONG PHƯƠNG - AI NỢ AI GHI RÕ)
-// 3. CẬP NHẬT API GET DEBTS (Trả về thông tin Pending Settlement)
+
 fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, reply) => {
     try {
         const groupId = parseInt(request.params.id);
-        // ... (Giữ nguyên phần lấy members)
-        const members = await prisma.groupMember.findMany({ where: { groupId }, include: { user: true } });
+        
+        // 1. Lấy thành viên
+        const members = await prisma.groupMember.findMany({ 
+            where: { groupId }, 
+            include: { user: true } 
+        });
 
-        // Lấy danh sách expenses (Giữ nguyên)
+        // 2. Lấy chi phí đã duyệt (Hàng chính)
         const expenses = await prisma.expense.findMany({ 
             where: { groupId, isApproved: true },
             include: { splits: true },
             orderBy: { createdAt: 'asc' }
         });
 
-        // Lấy Hàng chờ (Giữ nguyên)
+        // 3. Lấy hàng chờ (Để hiển thị thôi)
         const pendingExpenses = await prisma.expense.findMany({
             where: { groupId, isApproved: false },
             include: { splits: true, paidBy: true }
         });
 
-        // --- BIẾN MỚI: LƯU CÁC KHOẢN ĐANG CHỜ XÁC NHẬN GIỮA 2 NGƯỜI ---
-        // Key: "debtorId-creditorId", Value: { expenseId, amount }
+        // 4. Khởi tạo biến
         const pendingSettlements = {}; 
-
         let totalGroupSpend = 0; 
         const debtMap = {}; 
         const userStats = {}; 
-        // ... (Giữ nguyên phần khởi tạo userStats)
+
         members.forEach(m => {
-            userStats[m.userId] = { id: m.userId, name: m.user.name, paidOriginal: 0, received: 0 };
+            userStats[m.userId] = { 
+                id: m.userId, name: m.user.name, paidOriginal: 0, received: 0 
+            };
         });
 
-        // Helper addDebt (Giữ nguyên)
+        // Helper thêm nợ
         const addDebt = (fromId, toId, amount, date) => {
              const key = `${fromId}-${toId}`;
              if (!debtMap[key]) debtMap[key] = { amount: 0, earliestDueDate: null };
              debtMap[key].amount += amount;
              if (date) {
                 const currentDue = debtMap[key].earliestDueDate;
-                if (!currentDue || new Date(date) < new Date(currentDue)) debtMap[key].earliestDueDate = date;
+                if (!currentDue || new Date(date) < new Date(currentDue)) {
+                    debtMap[key].earliestDueDate = date;
+                }
              }
         };
 
+        // 5. DUYỆT QUA TỪNG KHOẢN CHI (Vòng lặp quan trọng)
         expenses.forEach(e => {
             const amount = parseFloat(e.amount);
             const payerId = e.paidById;
-            const isSettlement = e.description.toLowerCase().includes("trả nợ") || e.isConfirmed === true; // Logic nhận diện trả nợ
+            
+            // Kiểm tra xem có phải là Trả nợ (Settlement) không
+            const isSettlement = e.description.toLowerCase().includes("trả nợ") || e.isConfirmed === true; 
 
-            // NẾU LÀ TRẢ NỢ
             if (isSettlement) {
-                // TRƯỜNG HỢP 1: Đã xác nhận -> Trừ nợ (Logic cũ)
+                // ... (Logic trả nợ giữ nguyên) ...
                 if (e.isConfirmed) {
                     e.splits.forEach(s => {
                         const key = `${payerId}-${s.userId}`;
                         if (debtMap[key]) debtMap[key].amount -= amount;
                         if (userStats[s.userId]) userStats[s.userId].received += amount;
                     });
-                } 
-                // TRƯỜNG HỢP 2: CHƯA xác nhận (isConfirmed = false) -> Lưu vào pendingSettlements
-                else {
+                } else {
                     e.splits.forEach(s => {
-                        // Key: Người trả - Người nhận
                         const key = `${payerId}-${s.userId}`;
-                        // Lưu lại để Frontend biết mà hiện nút
-                        pendingSettlements[key] = {
-                            expenseId: e.id,
-                            amount: amount
-                        };
+                        pendingSettlements[key] = { expenseId: e.id, amount: amount };
                     });
                 }
-                return;
+                return; 
             }
 
-            // ... (Logic tính chi tiêu thường giữ nguyên y hệt code cũ)
+            // --- XỬ LÝ CHI TIÊU THƯỜNG ---
             totalGroupSpend += amount;
             if (userStats[payerId]) userStats[payerId].paidOriginal += amount;
+            
             const splitUsers = e.splits;
+            
+            // B1. CHIA TIỀN GỐC (Principal)
+            // Lấy trực tiếp từ amount đã lưu trong split
             if (splitUsers.length > 0) {
-                const shareBase = amount / splitUsers.length;
-                splitUsers.forEach(split => {
-                    let debtAmount = shareBase;
-                    if (split.paysProfit && e.profit > 0) {
-                        const profitPayers = splitUsers.filter(s => s.paysProfit).length;
-                        debtAmount += (e.profit / profitPayers);
-                    }
+                 // Nếu là bản ghi cũ chưa có amount riêng, thì chia đều (fallback)
+                 const fallbackShare = amount / splitUsers.length;
+
+                 splitUsers.forEach(split => {
+                    // Ưu tiên lấy split.amount, nếu bằng 0 (data cũ) thì lấy fallback
+                    const debtAmount = split.amount > 0 ? split.amount : fallbackShare;
                     addDebt(split.userId, payerId, debtAmount, e.dueDate);
-                });
+                 });
             }
+
+            // ==========================================================
+            // ✅ B2. CHIA TIỀN LÃI (Logic tỷ lệ thuận bạn vừa hỏi)
+            // ==========================================================
+            if (e.profit > 0) {
+                const profitPayers = splitUsers.filter(s => s.paysProfit);
+                
+                // Tính tổng tiền gốc của những người chịu lãi
+                const totalPrincipalOfProfitPayers = profitPayers.reduce((sum, s) => sum + s.amount, 0);
+                
+                if (totalPrincipalOfProfitPayers > 0) {
+                    // Tính ra tỷ lệ phần trăm thực tế từ dữ liệu đã lưu
+                    // Ví dụ: Tổng lãi 100k, Tổng gốc chịu lãi 1tr => Tỷ lệ = 0.1 (10%)
+                    const impliedPercentage = e.profit / totalPrincipalOfProfitPayers; 
+        
+                    profitPayers.forEach(payer => {
+                        // Tiền lãi phải trả = Tiền gốc của người đó * Tỷ lệ
+                        const profitShare = payer.amount * impliedPercentage;
+                        addDebt(payer.userId, payerId, profitShare, e.dueDate);
+                    });
+                }
+            }
+            // ==========================================================
         });
 
-        // Tổng hợp dữ liệu (Thêm pendingSettlements vào từng dòng nợ)
+        // 6. Tổng hợp dữ liệu trả về (Giữ nguyên)
         const finalData = members.map(m => {
             const uid = m.userId;
             
             const iOwe = [];
             members.forEach(other => {
                 const key = `${uid}-${other.userId}`;
-                if (debtMap[key] && debtMap[key].amount > 100) { 
+                if (debtMap[key] && debtMap[key].amount > 50) { 
                     iOwe.push({
                         toId: other.userId,
                         toName: other.user.name,
                         amount: debtMap[key].amount,
                         dueDate: debtMap[key].earliestDueDate,
-                        // Kiểm tra xem có đang chờ xác nhận không
                         pending: pendingSettlements[`${uid}-${other.userId}`] || null 
                     });
                 }
@@ -235,13 +259,12 @@ fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, 
             const owesMe = [];
             members.forEach(other => {
                 const key = `${other.userId}-${uid}`;
-                if (debtMap[key] && debtMap[key].amount > 100) {
+                if (debtMap[key] && debtMap[key].amount > 50) {
                     owesMe.push({
                         fromId: other.userId,
                         fromName: other.user.name,
                         amount: debtMap[key].amount,
                         dueDate: debtMap[key].earliestDueDate,
-                        // Kiểm tra xem họ có báo trả mình chưa
                         pending: pendingSettlements[`${other.userId}-${uid}`] || null
                     });
                 }
@@ -266,48 +289,67 @@ fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, 
 });
 
 // --- API EXPENSE Thêm - khoản chi tiêu mới (Tạo hóa đơn) ---9------------------------------
-// 7. API TẠO CHI PHÍ (CÓ HẠN TRẢ VÀ BẢO MẬT)
-// Sửa app.post thành fastify.post
-// 7. API TẠO CHI PHÍ (CÓ CHỌN NGƯỜI CHIA TIỀN)
-// 1. CẬP NHẬT API TẠO CHI PHÍ (Thêm xử lý Lãi & Hàng chờ)
+// 1. CẬP NHẬT API TẠO CHI PHÍ (POST /expenses)
+// --- API TẠO CHI PHÍ MỚI (Cập nhật tính lãi theo %) ---
 fastify.post('/expenses', { onRequest: [authenticate] }, async (request, reply) => {
-    // Nhận thêm profitPayerIds (Danh sách người phải trả lãi)
-    const { description, amount, groupId, paidById, profit, dueDate, involvedUserIds, profitPayerIds } = request.body;
+    // Nhận profitPercentage (số %) từ Frontend gửi lên
+    const { description, amount, groupId, paidById, profitPercentage, dueDate, splits } = request.body;
 
-    if (!description || !amount || !groupId || !involvedUserIds?.length) {
-        return reply.code(400).send({ error: "Thiếu thông tin bắt buộc" });
+    const totalAmount = parseFloat(amount);
+
+    // Validate: Tổng tiền chia phải khớp với tổng gốc
+    const totalSplitAmount = splits.reduce((sum, item) => sum + item.amount, 0);
+    if (Math.abs(totalSplitAmount - totalAmount) > 1000) { 
+         return reply.code(400).send({ error: "Tổng tiền chia không khớp với số tiền gốc!" });
     }
 
     try {
         const creatorId = request.user.id;
+        const isAutoApproved = splits.length === 1 && splits[0].userId === creatorId;
+        
+        // --- LOGIC TÍNH LÃI MỚI ---
+        let calculatedTotalProfit = 0;
+
+        const splitsWithProfit = splits.map(s => {
+            // Tính lãi riêng cho từng người: (Gốc * % lãi) / 100
+            let individualProfit = 0;
+            // Chỉ tính nếu người đó phải chịu lãi (paysProfit = true) và có nhập %
+            if (s.paysProfit && profitPercentage > 0) {
+                individualProfit = (s.amount * parseFloat(profitPercentage)) / 100;
+            }
+            
+            calculatedTotalProfit += individualProfit;
+
+            return {
+                userId: parseInt(s.userId),
+                amount: parseFloat(s.amount),
+                paysProfit: s.paysProfit || false,
+                hasApproved: parseInt(s.userId) === creatorId,
+            };
+        });
 
         const expense = await prisma.expense.create({
             data: {
                 description,
-                amount: parseFloat(amount),
+                amount: totalAmount,
                 groupId: parseInt(groupId),
                 paidById: parseInt(paidById),
-                profit: parseFloat(profit) || 0,
+                
+                // QUAN TRỌNG: Lưu tổng số tiền lãi vừa tính được vào Database
+                profit: calculatedTotalProfit, 
+                
                 dueDate: dueDate ? new Date(dueDate) : null,
                 isConfirmed: false,
-                
-                // Mặc định là FALSE (Hàng chờ), trừ khi chỉ có 1 mình người tạo tự chơi
-                isApproved: involvedUserIds.length === 1 && involvedUserIds[0] === creatorId,
+                isApproved: isAutoApproved,
 
                 splits: {
-                    create: involvedUserIds.map(uid => ({
-                        userId: parseInt(uid),
-                        // Nếu ID này nằm trong danh sách trả lãi -> true
-                        paysProfit: profitPayerIds ? profitPayerIds.includes(uid) : false,
-                        // Người tạo mặc định là ĐỒNG Ý, người khác là CHƯA (false)
-                        hasApproved: parseInt(uid) === creatorId
-                    }))
+                    create: splitsWithProfit
                 }
             }
         });
         return reply.send(expense);
     } catch (error) {
-        console.error(error);
+        console.error("Lỗi tạo chi phí:", error);
         return reply.code(500).send({ error: "Lỗi server" });
     }
 });
@@ -650,6 +692,59 @@ fastify.post('/expenses/:id/reject', { onRequest: [authenticate] }, async (reque
     // Logic: Xóa khoản chi này đi
     await prisma.expense.delete({ where: { id: expenseId } });
     return reply.send({ message: "Đã từ chối thanh toán" });
+});
+
+// 1. API LẤY THÔNG TIN PROFILE (Chi tiết)
+fastify.get('/profile', { onRequest: [authenticate] }, async (request, reply) => {
+    try {
+        const user = await prisma.user.findUnique({
+            where: { id: request.user.id }
+        });
+        // Loại bỏ password trước khi trả về
+        const { password, ...userData } = user;
+        return reply.send(userData);
+    } catch (error) {
+        return reply.code(500).send({ error: "Lỗi lấy thông tin" });
+    }
+});
+
+// 2. API CẬP NHẬT PROFILE
+fastify.put('/profile', { onRequest: [authenticate] }, async (request, reply) => {
+    const { 
+        name, username, password, phone, address, 
+        gender, dob, cccd, bankAccount, bankBin, bankName 
+    } = request.body;
+
+    try {
+        const updateData = {
+            name, username, phone, address, gender, cccd,
+            bankAccount, bankBin, bankName,
+            dob: dob ? new Date(dob) : null
+        };
+
+        // Nếu có gửi mật khẩu mới lên thì mới cập nhật và mã hóa
+        if (password && password.trim() !== "") {
+            const hashedPassword = await bcrypt.hash(password, 10);
+            updateData.password = hashedPassword;
+        }
+
+        const updatedUser = await prisma.user.update({
+            where: { id: request.user.id },
+            data: updateData
+        });
+
+        // Loại bỏ password khi trả về
+        const { password: _, ...userNoPass } = updatedUser;
+        return reply.send(userNoPass);
+
+    } catch (error) {
+        console.error(error);
+        // Kiểm tra lỗi trùng unique (ví dụ trùng username)
+        if (error.code === 'P2002') {
+            return reply.code(400).send({ error: "Tên đăng nhập hoặc SĐT đã tồn tại" });
+        }
+        return reply.code(500).send({ error: "Lỗi cập nhật thông tin" });
+    }
 });
 
 

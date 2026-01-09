@@ -14,19 +14,28 @@ datasource db {
 model User {
   id        Int      @id @default(autoincrement())
   email     String   @unique
-  password  String
+  password  String?
   name      String?
-  createdAt DateTime @default(now())
-
-  // Quan hệ: 1 User có thể tạo nhiều Group (Đã đặt tên "GroupCreator")
-  groupsCreated Group[] @relation("GroupCreator")
-
-  // Quan hệ: 1 User có thể tham gia nhiều GroupMember
-  memberships GroupMember[]
-
-  // Quan hệ: 1 User có thể trả nhiều Expense (Đã đặt tên "ExpensePayer")
-  expensesPaid Expense[] @relation("ExpensePayer")
+  
+  // --- CÁC TRƯỜNG MỚI ---
+  username      String?  @unique // Tên đăng nhập
+  phone         String?  // Số điện thoại
+  address       String?  // Địa chỉ
+  gender        String?  // Nam/Nữ/Khác
+  dob           DateTime? // Ngày sinh
+  cccd          String?   // Căn cước công dân
+  bankAccount   String?   // Số tài khoản ngân hàng
+  bankBin       String?   // Mã BIN ngân hàng
+  bankName      String?   // Tên ngân hàng (Lưu tên cho dễ hiển thị)
+  
+  // ... Các trường cũ giữ nguyên
+  googleId      String?  @unique
+  avatar        String?
+  expenses      Expense[]     @relation("ExpensePayer")
+  groupMembers  GroupMember[]
   expenseSplits ExpenseSplit[]
+  createdAt     DateTime @default(now())
+  createdGroups Group[] @relation("GroupCreator")
 }
 
 // Bảng lưu thông tin nhóm
@@ -101,6 +110,8 @@ model ExpenseSplit {
 
   // 4. MỚI: Người này đã bấm Đồng ý chưa?
   hasApproved Boolean @default(false)
+
+  amount      Float   @default(0)
 
   @@id([expenseId, userId])
 }

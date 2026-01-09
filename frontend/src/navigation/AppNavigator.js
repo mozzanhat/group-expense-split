@@ -15,6 +15,7 @@ import InviteMemberScreen from '../screens/InviteMemberScreen';
 
 import EditExpenseScreen from '../screens/EditExpenseScreen';
 
+import ProfileScreen from '../screens/ProfileScreen';
 // 1. NHỚ IMPORT MÀN HÌNH TẠO NHÓM
 import CreateGroupScreen from '../screens/CreateGroupScreen'; 
 
@@ -30,6 +31,11 @@ function MainStack() {
         component={HomeScreen} 
         options={{ title: 'Trang Chủ', headerShown: false }} 
       />
+      <Stack.Screen 
+    name="Profile" 
+    component={ProfileScreen} 
+    options={{ title: 'Hồ sơ cá nhân' }} 
+  />
       <Stack.Screen 
         name="GroupDetail" 
         component={GroupDetailScreen} 

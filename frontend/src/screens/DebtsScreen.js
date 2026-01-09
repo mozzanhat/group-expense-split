@@ -15,15 +15,17 @@ export default function DebtsScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Modal Thu tiền thủ công
+  // Modal Thu tiền
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedDebtorId, setSelectedDebtorId] = useState(null); 
   const [selectedDebtorName, setSelectedDebtorName] = useState('');
   const [settleAmount, setSettleAmount] = useState(''); 
 
+  // --- 1. GỌI API ---
   const fetchDebts = async () => {
     try {
       const response = await api.get(`/groups/${groupId}/debts`);
+      // console.log("Data check:", response.data); // Bỏ comment để debug nếu cần
       setData(response.data);
     } catch (error) {
       console.error(error);
@@ -37,48 +39,31 @@ export default function DebtsScreen({ route, navigation }) {
   useFocusEffect(useCallback(() => { fetchDebts(); }, [groupId]));
   const onRefresh = () => { setRefreshing(true); fetchDebts(); };
 
-  // --- LOGIC 1: NGƯỜI NỢ BẤM "TRẢ NỢ" ---
+  // --- CÁC HÀM XỬ LÝ ---
   const handleNotifyPayment = async (creditorId, amount) => {
     try {
-        await api.post(`/groups/${groupId}/notify-payment`, {
-            creditorId, amount
-        });
-        Alert.alert("Đã gửi", "Đã thông báo cho chủ nợ. Chờ họ xác nhận.");
+        await api.post(`/groups/${groupId}/notify-payment`, { creditorId, amount });
+        Alert.alert("Đã gửi", "Đã thông báo trả nợ.");
         fetchDebts();
-    } catch (error) {
-        Alert.alert("Lỗi", "Không gửi được thông báo");
-    }
+    } catch (error) { Alert.alert("Lỗi", "Không gửi được thông báo"); }
   };
 
-  // --- LOGIC 2: CHỦ NỢ BẤM "XÁC NHẬN" (Dùng API confirm có sẵn) ---
   const handleConfirm = async (expenseId) => {
     try {
         await api.put(`/expenses/${expenseId}/confirm`);
-        Alert.alert("Thành công", "Đã xác nhận đã nhận tiền!");
+        Alert.alert("Thành công", "Đã xác nhận!");
         fetchDebts();
-    } catch (error) {
-        Alert.alert("Lỗi", "Không thể xác nhận");
-    }
+    } catch (error) { Alert.alert("Lỗi", "Lỗi xác nhận"); }
   };
 
-  // --- LOGIC 3: CHỦ NỢ BẤM "CHƯA NHẬN" ---
   const handleReject = async (expenseId) => {
     try {
         await api.post(`/expenses/${expenseId}/reject`);
-        Alert.alert("Đã từ chối", "Yêu cầu thanh toán đã bị hủy.");
+        Alert.alert("Đã hủy", "Đã từ chối thanh toán.");
         fetchDebts();
-    } catch (error) {
-        Alert.alert("Lỗi", "Không thể từ chối");
-    }
+    } catch (error) { Alert.alert("Lỗi", "Lỗi từ chối"); }
   };
 
-  // --- LOGIC 4: THU TIỀN THỦ CÔNG (Giữ nguyên) ---
-  const openSettleModal = (debtorId, debtorName, amount) => {
-    setSelectedDebtorId(debtorId);
-    setSelectedDebtorName(debtorName);
-    setSettleAmount(amount.toString());
-    setModalVisible(true);
-  };
   const handleManualSettle = async () => {
     if (!settleAmount) return;
     try {
@@ -91,11 +76,54 @@ export default function DebtsScreen({ route, navigation }) {
     } catch (error) { Alert.alert("Lỗi", "Lỗi"); }
   };
 
-  // --- RENDER ---
+  const openSettleModal = (debtorId, debtorName, amount) => {
+    setSelectedDebtorId(debtorId);
+    setSelectedDebtorName(debtorName);
+    setSettleAmount(amount.toString());
+    setModalVisible(true);
+  };
+
+  // --- 2. RENDER GIAO DIỆN ---
+
+  // === QUAN TRỌNG: PHẦN HIỂN THỊ HÀNG CHỜ ===
+  const renderPendingExpenses = () => {
+    if (!data?.pendingExpenses || data.pendingExpenses.length === 0) return null;
+
+    return (
+      <View style={styles.pendingContainer}>
+        <Text style={styles.pendingHeader}>⏳ Hàng chờ duyệt ({data.pendingExpenses.length})</Text>
+        <Text style={{fontSize: 12, color: '#666', marginBottom: 10, fontStyle: 'italic'}}>
+            (Chi phí mới tạo chưa được tính vào nợ. Cần vào Sửa nhóm để duyệt)
+        </Text>
+        
+        {data.pendingExpenses.map((item) => (
+          <View key={item.id} style={styles.pendingItem}>
+            <View style={{flex: 1}}>
+                <Text style={styles.pendingDesc}>{item.description}</Text>
+                <Text style={styles.pendingDetail}>👤 Tạo bởi: {item.paidBy?.name}</Text>
+                {item.dueDate && (
+                     <Text style={styles.pendingDetail}>📅 Hạn: {new Date(item.dueDate).toLocaleDateString('vi-VN')}</Text>
+                )}
+            </View>
+            <Text style={styles.pendingAmount}>{formatCurrency(item.amount)}</Text>
+          </View>
+        ))}
+        
+        <TouchableOpacity 
+            style={styles.voteLinkButton} 
+            onPress={() => navigation.navigate('EditGroup', { groupId })}
+        >
+            <Text style={styles.voteLinkText}>👉 Vào "Sửa nhóm" để Duyệt ngay</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+  // ===========================================
+
   const renderDebtItem = ({ item }) => {
     const isMe = item.userId === user.id;
 
-    // 1. DANH SÁCH MÌNH NỢ NGƯỜI KHÁC (Cần Trả)
+    // Danh sách Cần trả
     const renderDebtsList = () => {
         if (!item.debts || item.debts.length === 0) return null;
         return (
@@ -107,19 +135,11 @@ export default function DebtsScreen({ route, navigation }) {
                             <Text style={styles.debtText}>→ Trả {d.toName}: <Text style={{fontWeight:'bold'}}>{formatCurrency(d.amount)}</Text></Text>
                             {d.dueDate && <Text style={styles.dateText}> (Hạn: {new Date(d.dueDate).toLocaleDateString('vi-VN')})</Text>}
                         </View>
-                        
-                        {/* NÚT TRẢ NỢ: Chỉ hiện cho chính mình */}
                         {isMe && (
-                            d.pending ? (
-                                <Text style={styles.waitingText}>🕒 Đang chờ xác nhận...</Text>
-                            ) : (
-                                <TouchableOpacity 
-                                    style={styles.payButton} 
-                                    onPress={() => handleNotifyPayment(d.toId, d.amount)}
-                                >
-                                    <Text style={styles.btnText}>Trả nợ</Text>
-                                </TouchableOpacity>
-                            )
+                            d.pending ? <Text style={styles.waitingText}>🕒 Chờ xác nhận...</Text>
+                            : <TouchableOpacity style={styles.payButton} onPress={() => handleNotifyPayment(d.toId, d.amount)}>
+                                <Text style={styles.btnText}>Trả nợ</Text>
+                              </TouchableOpacity>
                         )}
                     </View>
                 ))}
@@ -127,54 +147,34 @@ export default function DebtsScreen({ route, navigation }) {
         );
     };
 
-   // 2. DANH SÁCH NGƯỜI KHÁC NỢ MÌNH (Được Nhận)
-  const renderCreditsList = () => {
-    if (!item.credits || item.credits.length === 0) return null;
-    
-    return (
-        <View style={styles.sectionBlock}>
-            <Text style={styles.labelGreen}>❇️ {isMe ? "Người khác nợ bạn:" : `Được nhận từ:`}</Text>
-            {item.credits.map((c, idx) => (
-                <View key={idx} style={styles.creditRow}>
-                    <View style={{flex: 1}}>
-                        <Text style={styles.debtText}>← {c.fromName} nợ: <Text style={{fontWeight:'bold'}}>{formatCurrency(c.amount)}</Text></Text>
-                        
-                        {/* Hiện trạng thái nếu có */}
-                        {c.pending ? (
-                            <Text style={{fontSize:11, color:'#e67e22', fontStyle:'italic'}}>🔔 Đã báo trả: {formatCurrency(c.pending.amount)}</Text>
-                        ) : (
-                            // Nếu chưa báo trả -> Hiện dòng này
-                            <Text style={{fontSize:11, color:'#999', fontStyle:'italic'}}>(Chưa thanh toán)</Text>
-                        )}
-
-                        {c.dueDate && <Text style={styles.dateText}> (Hạn: {new Date(c.dueDate).toLocaleDateString('vi-VN')})</Text>}
-                    </View>
-                    
-                    {/* CÁC NÚT BẤM (Chỉ hiện cho mình) */}
-                    {isMe && (
-                        c.pending ? (
-                            // TRƯỜNG HỢP 1: Họ đã bấm "Trả nợ" -> Hiện nút xác nhận
+    // Danh sách Được nhận
+    const renderCreditsList = () => {
+        if (!item.credits || item.credits.length === 0) return null;
+        return (
+            <View style={styles.sectionBlock}>
+                <Text style={styles.labelGreen}>❇️ {isMe ? "Người khác nợ bạn:" : `Được nhận từ:`}</Text>
+                {item.credits.map((c, idx) => (
+                    <View key={idx} style={styles.creditRow}>
+                        <View style={{flex: 1}}>
+                            <Text style={styles.debtText}>← {c.fromName} nợ: <Text style={{fontWeight:'bold'}}>{formatCurrency(c.amount)}</Text></Text>
+                            {c.pending ? <Text style={{fontSize:11, color:'#e67e22', fontStyle:'italic'}}>🔔 Đã báo trả: {formatCurrency(c.pending.amount)}</Text>
+                            : <Text style={{fontSize:11, color:'#999', fontStyle:'italic'}}>(Chưa thanh toán)</Text>}
+                        </View>
+                        {isMe && c.pending && (
                             <View style={{flexDirection: 'row'}}>
                                 <TouchableOpacity style={[styles.actionBtn, styles.rejectBtn]} onPress={() => handleReject(c.pending.expenseId)}>
-                                    <Text style={styles.btnText}>Chưa nhận</Text>
+                                    <Text style={styles.btnText}>Từ chối</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity style={[styles.actionBtn, styles.confirmBtn]} onPress={() => handleConfirm(c.pending.expenseId)}>
                                     <Text style={styles.btnText}>Đã nhận</Text>
                                 </TouchableOpacity>
                             </View>
-                        ) : (
-                            // TRƯỜNG HỢP 2: Họ CHƯA bấm "Trả nợ" -> KHÔNG HIỆN NÚT THU TIỀN NỮA
-                            // (Bạn có thể để trống null hoặc hiện icon chờ)
-                            <View style={{padding: 5}}>
-                                <Text style={{fontSize: 18}}>⏳</Text> 
-                            </View>
-                        )
-                    )}
-                </View>
-            ))}
-        </View>
-    );
-  };
+                        )}
+                    </View>
+                ))}
+            </View>
+        );
+    };
 
     return (
       <View style={styles.card}>
@@ -195,12 +195,20 @@ export default function DebtsScreen({ route, navigation }) {
   return (
     <View style={styles.container}>
       <View style={styles.summary}><Text style={styles.summaryText}>Tổng chi tiêu nhóm: {formatCurrency(data?.total || 0)}</Text></View>
+      
       <FlatList 
-        data={data?.debts} keyExtractor={item => item.userId.toString()} 
-        renderItem={renderDebtItem} 
+        data={data?.debts} 
+        keyExtractor={item => item.userId.toString()} 
+        renderItem={renderDebtItem}
+        
+        // --- CHỖ NÀY QUAN TRỌNG NHẤT: ---
+        // Phải gọi hàm renderPendingExpenses() ở đây nó mới hiện
+        ListHeaderComponent={renderPendingExpenses()} 
+        
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       />
-      {/* Modal Thu Tiền (Giữ nguyên) */}
+
+      {/* Modal Thu tiền */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
             <View style={styles.modalView}>
@@ -222,6 +230,17 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5', padding: 10 },
   summary: { backgroundColor: '#333', padding: 15, borderRadius: 10, marginBottom: 10 },
   summaryText: { color: 'white', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
+  
+  // Style Hàng chờ
+  pendingContainer: { backgroundColor: '#fff3cd', padding: 10, borderRadius: 10, marginBottom: 15, borderWidth: 1, borderColor: '#ffeeba' },
+  pendingHeader: { fontSize: 16, fontWeight: 'bold', color: '#856404', marginBottom: 5 },
+  pendingItem: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8, borderBottomWidth: 1, borderBottomColor: '#faeec5', paddingBottom: 5 },
+  pendingDesc: { fontWeight: 'bold', color: '#555', fontSize: 15 },
+  pendingDetail: { fontSize: 12, color: '#666', marginTop: 2 },
+  pendingAmount: { fontWeight: 'bold', color: '#e67e22', fontSize: 15 },
+  voteLinkButton: { marginTop: 5, padding: 8, backgroundColor: '#ffc107', borderRadius: 5, alignItems: 'center' },
+  voteLinkText: { fontWeight: 'bold', color: '#333' },
+
   card: { backgroundColor: 'white', padding: 15, borderRadius: 8, marginBottom: 10, elevation: 2 },
   name: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 5 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10, backgroundColor: '#f0f0f0', padding: 8, borderRadius: 5 },
@@ -236,16 +255,13 @@ const styles = StyleSheet.create({
   dateText: { fontSize: 11, color: '#e67e22', fontStyle: 'italic' },
   emptyText: { textAlign: 'center', color: '#999', fontStyle: 'italic', marginTop: 10 },
   
-  // Button Styles
   payButton: { backgroundColor: '#e67e22', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 4 },
-  collectButton: { backgroundColor: '#007bff', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 4 },
   actionBtn: { paddingVertical: 5, paddingHorizontal: 8, borderRadius: 4, marginLeft: 5 },
   confirmBtn: { backgroundColor: '#28a745' },
   rejectBtn: { backgroundColor: '#dc3545' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 11 },
   waitingText: { fontSize: 11, color: '#e67e22', fontStyle: 'italic' },
 
-  // Modal Styles
   modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalView: { width: '80%', backgroundColor: 'white', padding: 20, borderRadius: 10, elevation: 5 },
   modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10 },
