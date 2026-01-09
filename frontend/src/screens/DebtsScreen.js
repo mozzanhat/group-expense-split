@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { 
   View, Text, StyleSheet, FlatList, RefreshControl, Alert, 
-  TouchableOpacity, TextInput, Modal, ActivityIndicator 
+  TouchableOpacity, TextInput, Modal, ActivityIndicator, Image 
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../api';
@@ -15,17 +15,21 @@ export default function DebtsScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Modal Thu tiền
+  // Modal Thu tiền (Xử lý tiền mặt)
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedDebtorId, setSelectedDebtorId] = useState(null); 
   const [selectedDebtorName, setSelectedDebtorName] = useState('');
   const [settleAmount, setSettleAmount] = useState(''); 
 
+  // ✅ MODAL QR CODE
+  const [qrModalVisible, setQrModalVisible] = useState(false);
+  const [qrUrl, setQrUrl] = useState('');
+  const [qrInfo, setQrInfo] = useState({ name: '', amount: 0 });
+
   // --- 1. GỌI API ---
   const fetchDebts = async () => {
     try {
       const response = await api.get(`/groups/${groupId}/debts`);
-      // console.log("Data check:", response.data); // Bỏ comment để debug nếu cần
       setData(response.data);
     } catch (error) {
       console.error(error);
@@ -83,19 +87,40 @@ export default function DebtsScreen({ route, navigation }) {
     setModalVisible(true);
   };
 
+  // ✅ HÀM MỞ QR CODE
+  const openQrModal = (creditor) => {
+    // 1. Kiểm tra xem chủ nợ có thông tin ngân hàng chưa
+    if (!creditor.bankBin || !creditor.bankAccount) {
+        Alert.alert("Thông báo", `Chủ nợ ${creditor.toName} chưa cập nhật thông tin ngân hàng trong Hồ sơ.`);
+        return;
+    }
+
+    // 2. Tạo nội dung chuyển khoản: "TenBan tra no" (Không dấu, ngắn gọn)
+    // Loại bỏ dấu tiếng Việt để tránh lỗi ngân hàng
+    const removeVietnameseTones = (str) => {
+        return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
+    }
+    const content = `${removeVietnameseTones(user.name)} tra no`; 
+
+    // 3. Tạo Link VietQR
+    // Format: https://img.vietqr.io/image/[BIN]-[Account]-compact.png?amount=[Amount]&addInfo=[Content]
+    const url = `https://img.vietqr.io/image/${creditor.bankBin}-${creditor.bankAccount}-compact2.png?amount=${creditor.amount}&addInfo=${encodeURIComponent(content)}`;
+    
+    setQrUrl(url);
+    setQrInfo({ name: creditor.toName, amount: creditor.amount });
+    setQrModalVisible(true);
+  };
+
   // --- 2. RENDER GIAO DIỆN ---
 
-  // === QUAN TRỌNG: PHẦN HIỂN THỊ HÀNG CHỜ ===
   const renderPendingExpenses = () => {
     if (!data?.pendingExpenses || data.pendingExpenses.length === 0) return null;
-
     return (
       <View style={styles.pendingContainer}>
         <Text style={styles.pendingHeader}>⏳ Hàng chờ duyệt ({data.pendingExpenses.length})</Text>
         <Text style={{fontSize: 12, color: '#666', marginBottom: 10, fontStyle: 'italic'}}>
             (Chi phí mới tạo chưa được tính vào nợ. Cần vào Sửa nhóm để duyệt)
         </Text>
-        
         {data.pendingExpenses.map((item) => (
           <View key={item.id} style={styles.pendingItem}>
             <View style={{flex: 1}}>
@@ -108,17 +133,12 @@ export default function DebtsScreen({ route, navigation }) {
             <Text style={styles.pendingAmount}>{formatCurrency(item.amount)}</Text>
           </View>
         ))}
-        
-        <TouchableOpacity 
-            style={styles.voteLinkButton} 
-            onPress={() => navigation.navigate('EditGroup', { groupId })}
-        >
+        <TouchableOpacity style={styles.voteLinkButton} onPress={() => navigation.navigate('EditGroup', { groupId })}>
             <Text style={styles.voteLinkText}>👉 Vào "Sửa nhóm" để Duyệt ngay</Text>
         </TouchableOpacity>
       </View>
     );
   };
-  // ===========================================
 
   const renderDebtItem = ({ item }) => {
     const isMe = item.userId === user.id;
@@ -135,12 +155,20 @@ export default function DebtsScreen({ route, navigation }) {
                             <Text style={styles.debtText}>→ Trả {d.toName}: <Text style={{fontWeight:'bold'}}>{formatCurrency(d.amount)}</Text></Text>
                             {d.dueDate && <Text style={styles.dateText}> (Hạn: {new Date(d.dueDate).toLocaleDateString('vi-VN')})</Text>}
                         </View>
-                        {isMe && (
-                            d.pending ? <Text style={styles.waitingText}>🕒 Chờ xác nhận...</Text>
-                            : <TouchableOpacity style={styles.payButton} onPress={() => handleNotifyPayment(d.toId, d.amount)}>
-                                <Text style={styles.btnText}>Trả nợ</Text>
-                              </TouchableOpacity>
+                        
+                        {isMe && !d.pending && (
+                            <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                                {/* ✅ NÚT QR CODE */}
+                                <TouchableOpacity style={styles.qrButton} onPress={() => openQrModal(d)}>
+                                    <Text style={{fontSize: 20}}>🏧</Text>
+                                </TouchableOpacity>
+
+                                <TouchableOpacity style={styles.payButton} onPress={() => handleNotifyPayment(d.toId, d.amount)}>
+                                    <Text style={styles.btnText}>Đã Trả</Text>
+                                </TouchableOpacity>
+                            </View>
                         )}
+                        {isMe && d.pending && <Text style={styles.waitingText}>🕒 Chờ xác nhận...</Text>}
                     </View>
                 ))}
             </View>
@@ -200,15 +228,38 @@ export default function DebtsScreen({ route, navigation }) {
         data={data?.debts} 
         keyExtractor={item => item.userId.toString()} 
         renderItem={renderDebtItem}
-        
-        // --- CHỖ NÀY QUAN TRỌNG NHẤT: ---
-        // Phải gọi hàm renderPendingExpenses() ở đây nó mới hiện
         ListHeaderComponent={renderPendingExpenses()} 
-        
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       />
 
-      {/* Modal Thu tiền */}
+      {/* ✅ MODAL QR CODE */}
+      <Modal visible={qrModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+            <View style={styles.modalQrView}>
+                <Text style={styles.modalTitle}>Quét mã để trả tiền</Text>
+                <Text style={{marginBottom: 10}}>Chủ tài khoản: <Text style={{fontWeight:'bold'}}>{qrInfo.name}</Text></Text>
+                <Text style={{marginBottom: 20, fontSize: 18, color: 'green', fontWeight:'bold'}}>{formatCurrency(qrInfo.amount)}</Text>
+                
+                {/* ẢNH QR TỪ VIETQR */}
+                {qrUrl ? (
+                    <Image 
+                        source={{ uri: qrUrl }} 
+                        style={{ width: 250, height: 250, marginBottom: 20 }} 
+                        resizeMode="contain"
+                    />
+                ) : <ActivityIndicator />}
+                
+                <TouchableOpacity 
+                    style={[styles.modalBtn, {backgroundColor: '#007bff', width: '100%'}]} 
+                    onPress={() => setQrModalVisible(false)}
+                >
+                    <Text style={{color:'white', textAlign:'center'}}>Đóng</Text>
+                </TouchableOpacity>
+            </View>
+        </View>
+      </Modal>
+
+      {/* Modal Thu tiền (Giữ nguyên) */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
             <View style={styles.modalView}>
@@ -231,7 +282,7 @@ const styles = StyleSheet.create({
   summary: { backgroundColor: '#333', padding: 15, borderRadius: 10, marginBottom: 10 },
   summaryText: { color: 'white', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   
-  // Style Hàng chờ
+  // Pending Styles
   pendingContainer: { backgroundColor: '#fff3cd', padding: 10, borderRadius: 10, marginBottom: 15, borderWidth: 1, borderColor: '#ffeeba' },
   pendingHeader: { fontSize: 16, fontWeight: 'bold', color: '#856404', marginBottom: 5 },
   pendingItem: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8, borderBottomWidth: 1, borderBottomColor: '#faeec5', paddingBottom: 5 },
@@ -256,14 +307,20 @@ const styles = StyleSheet.create({
   emptyText: { textAlign: 'center', color: '#999', fontStyle: 'italic', marginTop: 10 },
   
   payButton: { backgroundColor: '#e67e22', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 4 },
+  qrButton: { marginRight: 10, padding: 5 }, // Nút QR
   actionBtn: { paddingVertical: 5, paddingHorizontal: 8, borderRadius: 4, marginLeft: 5 },
   confirmBtn: { backgroundColor: '#28a745' },
   rejectBtn: { backgroundColor: '#dc3545' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 11 },
   waitingText: { fontSize: 11, color: '#e67e22', fontStyle: 'italic' },
 
+  // Modal Normal
   modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalView: { width: '80%', backgroundColor: 'white', padding: 20, borderRadius: 10, elevation: 5 },
+  
+  // Modal QR
+  modalQrView: { width: '90%', backgroundColor: 'white', padding: 20, borderRadius: 10, elevation: 5, alignItems: 'center' },
+  
   modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10 },
   modalInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 5, padding: 10, marginVertical: 10, fontSize: 16 },
   modalButtons: { flexDirection: 'row', justifyContent: 'flex-end' },

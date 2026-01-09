@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
   View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, 
-  Alert, ActivityIndicator, Modal, FlatList, Button 
+  Alert, ActivityIndicator, Modal, FlatList, Button, 
+  KeyboardAvoidingView, Platform // <--- 1. Thêm Import này
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import api from '../api';
 
-// Danh sách ngân hàng
+// Danh sách ngân hàng (Giữ nguyên)
 const BANK_LIST = [
   { name: "Vietcombank", code: "VCB", bin: "970436", shortName: "Vietcombank" },
   { name: "MBBank", code: "MB", bin: "970422", shortName: "MB" },
@@ -37,23 +38,14 @@ export default function ProfileScreen({ navigation }) {
   
   // Form State
   const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    username: '',
-    password: '', // Chỉ gửi đi nếu muốn đổi pass
-    phone: '',
-    address: '',
-    gender: 'Nam',
-    dob: new Date(),
-    cccd: '',
-    bankAccount: '',
-    bankBin: '',
-    bankName: ''
+    name: '', email: '', username: '', password: '', 
+    phone: '', address: '', gender: 'Nam', dob: new Date(), 
+    cccd: '', bankAccount: '', bankBin: '', bankName: ''
   });
 
   // UI State
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false); // Modal chọn ngân hàng
+  const [modalVisible, setModalVisible] = useState(false); 
 
   useEffect(() => {
     fetchProfile();
@@ -68,7 +60,7 @@ export default function ProfileScreen({ navigation }) {
       setFormData({
         ...user,
         dob: user.dob ? new Date(user.dob) : new Date(),
-        password: '' // Không hiển thị pass cũ
+        password: '' 
       });
     } catch (error) {
       Alert.alert("Lỗi", "Không thể tải thông tin cá nhân");
@@ -78,25 +70,20 @@ export default function ProfileScreen({ navigation }) {
   };
 
   const validate = () => {
-    // 1. Số điện thoại (10 số, bắt đầu bằng 0)
     const phoneRegex = /(84|0[3|5|7|8|9])+([0-9]{8})\b/;
     if (formData.phone && !phoneRegex.test(formData.phone)) {
       Alert.alert("Lỗi", "Số điện thoại không đúng định dạng VN");
       return false;
     }
-
-    // 2. CCCD (12 số)
     if (formData.cccd && formData.cccd.length !== 12) {
       Alert.alert("Lỗi", "CCCD phải có đúng 12 chữ số");
       return false;
     }
-
     return true;
   };
 
   const handleSave = async () => {
     if (!validate()) return;
-
     setLoading(true);
     try {
       await api.put('/profile', formData);
@@ -125,126 +112,139 @@ export default function ProfileScreen({ navigation }) {
   if (loading && !formData.email) return <ActivityIndicator size="large" style={{flex:1}} />;
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.header}>Thông Tin Tài Khoản</Text>
+    // 2. Bọc toàn bộ trong KeyboardAvoidingView
+    <KeyboardAvoidingView 
+      style={{ flex: 1 }} 
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 64 : 0} // Điều chỉnh khoảng cách nếu có Header
+    >
+      <ScrollView 
+        style={styles.container}
+        // 3. Cho phép cuộn quá nội dung một chút để nút không bị sát đáy
+        contentContainerStyle={{ paddingBottom: 100 }} 
+        // 4. Quan trọng: Cho phép bấm nút ngay cả khi bàn phím đang hiện
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.header}>Thông Tin Tài Khoản</Text>
 
-      {/* --- THÔNG TIN CÁ NHÂN --- */}
-      <View style={styles.section}>
-        <Text style={styles.label}>Tên đăng nhập</Text>
-        <TextInput 
-          style={styles.input} value={formData.name} 
-          onChangeText={t => setFormData({...formData, name: t})} 
-        />
+        {/* --- THÔNG TIN CÁ NHÂN --- */}
+        <View style={styles.section}>
+          <Text style={styles.label}>Tên đăng nhập</Text>
+          <TextInput 
+            style={styles.input} value={formData.name} 
+            onChangeText={t => setFormData({...formData, name: t})} 
+          />
 
-        <Text style={styles.label}>Email (Không thể sửa)</Text>
-        <TextInput style={[styles.input, {backgroundColor: '#eee'}]} value={formData.email} editable={false} />
+          <Text style={styles.label}>Email (Không thể sửa)</Text>
+          <TextInput style={[styles.input, {backgroundColor: '#eee'}]} value={formData.email} editable={false} />
 
-        <Text style={styles.label}>Họ và tên đầy đủ</Text>
-        <TextInput 
-          style={styles.input} value={formData.username} 
-          onChangeText={t => setFormData({...formData, username: t})} 
-          placeholder="VD: Nguyễn Văn A"
-        />
+          <Text style={styles.label}>Họ và tên đầy đủ</Text>
+          <TextInput 
+            style={styles.input} value={formData.username} 
+            onChangeText={t => setFormData({...formData, username: t})} 
+            placeholder="VD: Nguyễn Văn A"
+          />
 
-        <Text style={styles.label}>Mật khẩu mới (Để trống nếu không đổi)</Text>
-        <TextInput 
-          style={styles.input} value={formData.password} 
-          onChangeText={t => setFormData({...formData, password: t})} 
-          secureTextEntry placeholder="******"
-        />
+          <Text style={styles.label}>Mật khẩu mới (Để trống nếu không đổi)</Text>
+          <TextInput 
+            style={styles.input} value={formData.password} 
+            onChangeText={t => setFormData({...formData, password: t})} 
+            secureTextEntry placeholder="******"
+          />
 
-        <Text style={styles.label}>Số điện thoại</Text>
-        <TextInput 
-          style={styles.input} value={formData.phone} 
-          onChangeText={t => setFormData({...formData, phone: t})} 
-          keyboardType="phone-pad"
-        />
+          <Text style={styles.label}>Số điện thoại</Text>
+          <TextInput 
+            style={styles.input} value={formData.phone} 
+            onChangeText={t => setFormData({...formData, phone: t})} 
+            keyboardType="phone-pad"
+          />
 
-        <Text style={styles.label}>Địa chỉ</Text>
-        <TextInput 
-          style={styles.input} value={formData.address} 
-          onChangeText={t => setFormData({...formData, address: t})} 
-        />
+          <Text style={styles.label}>Địa chỉ</Text>
+          <TextInput 
+            style={styles.input} value={formData.address} 
+            onChangeText={t => setFormData({...formData, address: t})} 
+          />
 
-        <Text style={styles.label}>Giới tính</Text>
-        <View style={styles.row}>
-          {['Nam', 'Nữ', 'Khác'].map(g => (
-            <TouchableOpacity 
-              key={g} 
-              style={[styles.genderBtn, formData.gender === g && styles.genderBtnSelected]}
-              onPress={() => setFormData({...formData, gender: g})}
-            >
-              <Text style={formData.gender === g ? {color:'white', fontWeight:'bold'} : {color: '#333'}}>{g}</Text>
-            </TouchableOpacity>
-          ))}
+          <Text style={styles.label}>Giới tính</Text>
+          <View style={styles.row}>
+            {['Nam', 'Nữ', 'Khác'].map(g => (
+              <TouchableOpacity 
+                key={g} 
+                style={[styles.genderBtn, formData.gender === g && styles.genderBtnSelected]}
+                onPress={() => setFormData({...formData, gender: g})}
+              >
+                <Text style={formData.gender === g ? {color:'white', fontWeight:'bold'} : {color: '#333'}}>{g}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={styles.label}>Ngày sinh</Text>
+          <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.dateBtn}>
+            <Text>{formData.dob ? formData.dob.toLocaleDateString('vi-VN') : 'Chọn ngày'}</Text>
+          </TouchableOpacity>
+          {showDatePicker && (
+            <DateTimePicker
+              value={formData.dob || new Date()}
+              mode="date" display="default"
+              onChange={(e, d) => { setShowDatePicker(false); if(d) setFormData({...formData, dob: d}); }}
+            />
+          )}
+
+          <Text style={styles.label}>CCCD (12 số)</Text>
+          <TextInput 
+            style={styles.input} value={formData.cccd} 
+            onChangeText={t => setFormData({...formData, cccd: t})} 
+            keyboardType="numeric" maxLength={12}
+          />
         </View>
 
-        <Text style={styles.label}>Ngày sinh</Text>
-        <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.dateBtn}>
-          <Text>{formData.dob ? formData.dob.toLocaleDateString('vi-VN') : 'Chọn ngày'}</Text>
-        </TouchableOpacity>
-        {showDatePicker && (
-          <DateTimePicker
-            value={formData.dob || new Date()}
-            mode="date" display="default"
-            onChange={(e, d) => { setShowDatePicker(false); if(d) setFormData({...formData, dob: d}); }}
+        {/* --- THÔNG TIN NGÂN HÀNG --- */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Tài Khoản Ngân Hàng</Text>
+          
+          <Text style={styles.label}>Ngân hàng</Text>
+          <TouchableOpacity style={styles.dropdownBtn} onPress={() => setModalVisible(true)}>
+            <Text style={{fontWeight: 'bold'}}>
+              {formData.bankName ? `${formData.bankName}` : "-- Chọn ngân hàng --"}
+            </Text>
+            <Text>▼</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.label}>Số tài khoản</Text>
+          <TextInput 
+            style={styles.input} value={formData.bankAccount} 
+            onChangeText={t => setFormData({...formData, bankAccount: t})} 
+            keyboardType="numeric" placeholder="Nhập số tài khoản"
           />
-        )}
-
-        <Text style={styles.label}>CCCD (12 số)</Text>
-        <TextInput 
-          style={styles.input} value={formData.cccd} 
-          onChangeText={t => setFormData({...formData, cccd: t})} 
-          keyboardType="numeric" maxLength={12}
-        />
-      </View>
-
-      {/* --- THÔNG TIN NGÂN HÀNG --- */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Tài Khoản Ngân Hàng</Text>
-        
-        <Text style={styles.label}>Ngân hàng</Text>
-        <TouchableOpacity style={styles.dropdownBtn} onPress={() => setModalVisible(true)}>
-          <Text style={{fontWeight: 'bold'}}>
-            {formData.bankName ? `${formData.bankName}` : "-- Chọn ngân hàng --"}
-          </Text>
-          <Text>▼</Text>
-        </TouchableOpacity>
-
-        <Text style={styles.label}>Số tài khoản</Text>
-        <TextInput 
-          style={styles.input} value={formData.bankAccount} 
-          onChangeText={t => setFormData({...formData, bankAccount: t})} 
-          keyboardType="numeric" placeholder="Nhập số tài khoản"
-        />
-      </View>
-
-      <TouchableOpacity 
-  style={styles.bigButton} 
-  onPress={handleSave}
-  activeOpacity={0.7} // Hiệu ứng mờ khi ấn vào
->
-  {loading ? (
-    <ActivityIndicator color="white" />
-  ) : (
-    <Text style={styles.bigButtonText}>LƯU THÔNG TIN</Text>
-  )}
-</TouchableOpacity>
-
-      {/* --- MODAL CHỌN NGÂN HÀNG --- */}
-      <Modal visible={modalVisible} animationType="slide">
-        <View style={styles.modalContainer}>
-          <Text style={styles.modalTitle}>Chọn Ngân Hàng</Text>
-          <FlatList
-            data={BANK_LIST}
-            keyExtractor={item => item.bin}
-            renderItem={renderBankItem}
-          />
-          <Button title="Đóng" color="red" onPress={() => setModalVisible(false)} />
         </View>
-      </Modal>
 
-    </ScrollView>
+        <TouchableOpacity 
+          style={styles.bigButton} 
+          onPress={handleSave}
+          activeOpacity={0.7}
+        >
+          {loading ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.bigButtonText}>LƯU THÔNG TIN</Text>
+          )}
+        </TouchableOpacity>
+
+        {/* --- MODAL CHỌN NGÂN HÀNG --- */}
+        <Modal visible={modalVisible} animationType="slide">
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Chọn Ngân Hàng</Text>
+            <FlatList
+              data={BANK_LIST}
+              keyExtractor={item => item.bin}
+              renderItem={renderBankItem}
+            />
+            <Button title="Đóng" color="red" onPress={() => setModalVisible(false)} />
+          </View>
+        </Modal>
+
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -256,40 +256,36 @@ const styles = StyleSheet.create({
   label: { fontSize: 14, color: '#555', marginBottom: 5, marginTop: 10 },
   input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 5, padding: 10, fontSize: 16 },
   
-  // Gender
   row: { flexDirection: 'row', justifyContent: 'space-between' },
   genderBtn: { flex: 1, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: '#ccc', borderRadius: 5, marginHorizontal: 2 },
   genderBtnSelected: { backgroundColor: '#007bff', borderColor: '#007bff' },
 
-  // Date
   dateBtn: { borderWidth: 1, borderColor: '#ccc', padding: 12, borderRadius: 5, alignItems: 'center', backgroundColor: '#f9f9f9' },
 
-  // Bank Dropdown
   dropdownBtn: { flexDirection: 'row', justifyContent: 'space-between', borderWidth: 1, borderColor: '#ccc', padding: 12, borderRadius: 5, backgroundColor: '#f9f9f9' },
 
-  // Modal
   modalContainer: { flex: 1, padding: 20, paddingTop: 50 },
   modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 15, textAlign: 'center' },
   bankItem: { padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee' },
   bankName: { fontSize: 16 },
 
   bigButton: {
-    backgroundColor: '#007bff', // Màu xanh
-    paddingVertical: 16,        // Tăng chiều cao nút (quan trọng để dễ ấn)
-    borderRadius: 10,           // Bo góc tròn
+    backgroundColor: '#007bff', 
+    paddingVertical: 16,        
+    borderRadius: 10,           
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 20,              // Cách phần trên một chút
-    marginBottom: 50,           // Cách đáy màn hình 50px (đẩy cao lên để ngón cái dễ với tới)
-    elevation: 3,               // Đổ bóng nhẹ (Android)
-    shadowColor: '#000',        // Đổ bóng nhẹ (iOS)
+    marginTop: 20,              
+    marginBottom: 50,           
+    elevation: 3,               
+    shadowColor: '#000',        
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
     shadowRadius: 2,
   },
   bigButtonText: {
     color: 'white',
-    fontSize: 18,               // Chữ to rõ
+    fontSize: 18,               
     fontWeight: 'bold',
   },
 });

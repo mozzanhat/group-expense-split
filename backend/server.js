@@ -239,9 +239,10 @@ fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, 
         });
 
         // 6. Tổng hợp dữ liệu trả về (Giữ nguyên)
-        const finalData = members.map(m => {
+       const finalData = members.map(m => {
             const uid = m.userId;
             
+            // DANH SÁCH MÌNH NỢ NGƯỜI KHÁC
             const iOwe = [];
             members.forEach(other => {
                 const key = `${uid}-${other.userId}`;
@@ -249,6 +250,11 @@ fastify.get('/groups/:id/debts', { onRequest: [authenticate] }, async (request, 
                     iOwe.push({
                         toId: other.userId,
                         toName: other.user.name,
+                        
+                        // ✅ THÊM 2 DÒNG NÀY: Lấy thông tin ngân hàng của chủ nợ
+                        bankBin: other.user.bankBin,
+                        bankAccount: other.user.bankAccount,
+
                         amount: debtMap[key].amount,
                         dueDate: debtMap[key].earliestDueDate,
                         pending: pendingSettlements[`${uid}-${other.userId}`] || null 
