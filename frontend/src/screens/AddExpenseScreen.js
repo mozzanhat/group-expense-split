@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   View, Text, TextInput, Button, StyleSheet, Alert, 
-  TouchableOpacity, ScrollView, ActivityIndicator, Switch 
+  TouchableOpacity, ScrollView, ActivityIndicator, Switch,
+  KeyboardAvoidingView, Platform // <--- 1. Thêm import
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import api from '../api';
@@ -15,10 +16,7 @@ export default function AddExpenseScreen({ route, navigation }) {
   // Form State
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
-  
-  // ✅ THAY ĐỔI: Biến này giờ lưu số phần trăm (Ví dụ: "10")
   const [profitPercentage, setProfitPercentage] = useState(''); 
-  
   const [dueDate, setDueDate] = useState(new Date(Date.now() + 86400000));
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -89,7 +87,6 @@ export default function AddExpenseScreen({ route, navigation }) {
     return total - currentSum;
   };
 
-  // Hàm phụ trợ: Tính toán chi tiết từng người
   const calculateSplits = () => {
       const totalAmount = parseFloat(amount) || 0;
       let splits = [];
@@ -101,7 +98,6 @@ export default function AddExpenseScreen({ route, navigation }) {
               paysProfit: profitPayerIds.includes(uid)
           }));
       } else {
-          // Chia đều
           const share = involvedUserIds.length > 0 ? totalAmount / involvedUserIds.length : 0;
           splits = involvedUserIds.map(uid => ({
               userId: uid,
@@ -123,7 +119,6 @@ export default function AddExpenseScreen({ route, navigation }) {
     const totalAmount = parseFloat(amount);
     const splitsData = calculateSplits();
     
-    // Kiểm tra tổng tiền nhập tay
     if (isCustomSplit) {
         const sumCheck = splitsData.reduce((sum, s) => sum + s.amount, 0);
         if (Math.abs(sumCheck - totalAmount) > 1000) {
@@ -139,7 +134,6 @@ export default function AddExpenseScreen({ route, navigation }) {
         amount: totalAmount,
         groupId,
         paidById: user.id,
-        // Gửi số phần trăm lãi lên server
         profitPercentage: parseFloat(profitPercentage) || 0, 
         dueDate: dueDate.toISOString(),
         splits: splitsData 
@@ -158,7 +152,6 @@ export default function AddExpenseScreen({ route, navigation }) {
 
   const remaining = calculateRemaining();
   
-  // Tính tổng lãi dự kiến để hiển thị
   const currentSplits = calculateSplits();
   const totalEstimatedProfit = currentSplits.reduce((sum, s) => {
       if (s.paysProfit && profitPercentage) {
@@ -168,125 +161,131 @@ export default function AddExpenseScreen({ route, navigation }) {
   }, 0);
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.label}>Tên khoản chi</Text>
-      <TextInput style={styles.input} value={description} onChangeText={setDescription} placeholder="Nhập tên..." />
+    // 2. Bọc toàn bộ View trong KeyboardAvoidingView
+    <KeyboardAvoidingView 
+      style={{ flex: 1 }} 
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 100 : 0} // Chỉnh số này nếu có Header che mất
+    >
+      <ScrollView 
+        style={styles.container}
+        contentContainerStyle={{ paddingBottom: 100 }} // 3. Thêm khoảng trống ở đáy để cuộn được hết
+        keyboardShouldPersistTaps="handled" // 4. Giúp bấm nút được ngay cả khi bàn phím đang mở
+      >
+        <Text style={styles.label}>Tên khoản chi</Text>
+        <TextInput style={styles.input} value={description} onChangeText={setDescription} placeholder="Nhập tên..." />
 
-      <Text style={styles.label}>Tổng số tiền gốc</Text>
-      <TextInput 
-        style={styles.input} value={amount} onChangeText={setAmount} 
-        keyboardType="numeric" placeholder="0" 
-      />
+        <Text style={styles.label}>Tổng số tiền gốc</Text>
+        <TextInput 
+          style={styles.input} value={amount} onChangeText={setAmount} 
+          keyboardType="numeric" placeholder="0" 
+        />
 
-      {/* ✅ SỬA LABEL VÀ INPUT THÀNH % */}
-      <Text style={styles.label}>Lãi suất (%)</Text>
-      <TextInput 
-        style={styles.input} 
-        value={profitPercentage} 
-        onChangeText={setProfitPercentage} 
-        keyboardType="numeric" 
-        placeholder="VD: 10" 
-      />
-      {/* Hiển thị tổng lãi dự kiến */}
-      {parseFloat(profitPercentage) > 0 && (
-          <Text style={{textAlign:'right', color:'#e67e22', fontStyle:'italic', marginTop: 5}}>
-              Tổng lãi dự tính: {formatCurrency(totalEstimatedProfit)}
-          </Text>
-      )}
+        <Text style={styles.label}>Lãi suất (%)</Text>
+        <TextInput 
+          style={styles.input} 
+          value={profitPercentage} 
+          onChangeText={setProfitPercentage} 
+          keyboardType="numeric" 
+          placeholder="VD: 10" 
+        />
+        {parseFloat(profitPercentage) > 0 && (
+            <Text style={{textAlign:'right', color:'#e67e22', fontStyle:'italic', marginTop: 5}}>
+                Tổng lãi dự tính: {formatCurrency(totalEstimatedProfit)}
+            </Text>
+        )}
 
-      <Text style={styles.label}>Hạn trả</Text>
-      <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.dateButton}>
-        <Text style={styles.dateText}>📅 {dueDate.toLocaleDateString('vi-VN')}</Text>
-      </TouchableOpacity>
-      {showDatePicker && <DateTimePicker value={dueDate} mode="date" onChange={(e, d) => { setShowDatePicker(false); if(d) setDueDate(d); }} />}
+        <Text style={styles.label}>Hạn trả</Text>
+        <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.dateButton}>
+          <Text style={styles.dateText}>📅 {dueDate.toLocaleDateString('vi-VN')}</Text>
+        </TouchableOpacity>
+        {showDatePicker && <DateTimePicker value={dueDate} mode="date" onChange={(e, d) => { setShowDatePicker(false); if(d) setDueDate(d); }} />}
 
-      <View style={{marginTop: 20, flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
-          <Text style={styles.sectionTitle}>Chia tiền: {isCustomSplit ? "Tự nhập số" : "Chia đều"}</Text>
-          <Switch value={isCustomSplit} onValueChange={setIsCustomSplit} />
-      </View>
-
-      {isCustomSplit && (
-          <Text style={{textAlign:'right', color: remaining === 0 ? 'green' : 'red', fontWeight:'bold'}}>
-             {remaining === 0 ? "✅ Đã khớp đủ tiền" : `⚠️ Còn lại: ${formatCurrency(remaining)}`}
-          </Text>
-      )}
-
-      <View style={styles.membersContainer}>
-        {members.map((member) => {
-          const isSelected = involvedUserIds.includes(member.user.id);
-          
-          return (
-            <View key={member.user.id} style={styles.memberRow}>
-                <TouchableOpacity 
-                  style={[styles.memberBadge, isSelected ? styles.badgeSelected : styles.badgeUnselected]}
-                  onPress={() => toggleUserSelection(member.user.id)}
-                >
-                  <Text style={[styles.memberText, isSelected ? styles.textSelected : styles.textUnselected]}>
-                    {isSelected ? "☑️" : "⬜"} {member.user.name}
-                  </Text>
-                </TouchableOpacity>
-
-                {isCustomSplit && isSelected && (
-                    <TextInput 
-                        style={styles.smallInput}
-                        placeholder="Số tiền"
-                        keyboardType="numeric"
-                        value={customAmounts[member.user.id] || ''}
-                        onChangeText={(t) => handleAmountChange(member.user.id, t)}
-                    />
-                )}
-            </View>
-          );
-        })}
-      </View>
-
-      {/* --- PHẦN HIỂN THỊ NGƯỜI CHỊU LÃI --- */}
-      {(parseFloat(profitPercentage) > 0) && (
-        <View>
-          <Text style={[styles.sectionTitle, { color: '#e67e22', marginTop: 20 }]}>Ai chịu lãi {profitPercentage}%?</Text>
-          <View style={{flexDirection:'row', flexWrap:'wrap'}}>
-            {members.map((member) => {
-              if (!involvedUserIds.includes(member.user.id)) return null;
-              
-              const isProfitPayer = profitPayerIds.includes(member.user.id);
-              
-              // Tính lãi cụ thể cho người này để hiển thị
-              let userPrincipal = 0;
-              if (isCustomSplit) {
-                  userPrincipal = parseFloat(customAmounts[member.user.id] || 0);
-              } else {
-                  userPrincipal = (parseFloat(amount) || 0) / involvedUserIds.length;
-              }
-              const userProfit = (userPrincipal * parseFloat(profitPercentage)) / 100;
-
-              return (
-                <TouchableOpacity 
-                  key={`profit-${member.user.id}`} 
-                  style={[styles.profitBadge, isProfitPayer ? styles.badgeProfit : styles.badgeUnselected]}
-                  onPress={() => toggleProfitPayer(member.user.id)}
-                >
-                    <View>
-                        <Text style={[styles.memberText, isProfitPayer ? {color: '#d35400', fontWeight:'bold'} : styles.textUnselected]}>
-                            {isProfitPayer ? "💸" : "🙅"} {member.user.name}
-                        </Text>
-                        {/* Hiện luôn số tiền lãi họ phải trả */}
-                        {isProfitPayer && (
-                            <Text style={{fontSize: 10, color: '#d35400', textAlign: 'center'}}>
-                                +{formatCurrency(userProfit)}
-                            </Text>
-                        )}
-                    </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+        <View style={{marginTop: 20, flexDirection:'row', justifyContent:'space-between', alignItems:'center'}}>
+            <Text style={styles.sectionTitle}>Chia tiền: {isCustomSplit ? "Tự nhập số" : "Chia đều"}</Text>
+            <Switch value={isCustomSplit} onValueChange={setIsCustomSplit} />
         </View>
-      )}
 
-      <View style={{marginTop: 30, marginBottom: 50}}>
-        {loading ? <ActivityIndicator size="large" color="blue" /> : <Button title="GỬI YÊU CẦU" onPress={handleSave} color="#28a745" />}
-      </View>
-    </ScrollView>
+        {isCustomSplit && (
+            <Text style={{textAlign:'right', color: remaining === 0 ? 'green' : 'red', fontWeight:'bold'}}>
+               {remaining === 0 ? "✅ Đã khớp đủ tiền" : `⚠️ Còn lại: ${formatCurrency(remaining)}`}
+            </Text>
+        )}
+
+        <View style={styles.membersContainer}>
+          {members.map((member) => {
+            const isSelected = involvedUserIds.includes(member.user.id);
+            return (
+              <View key={member.user.id} style={styles.memberRow}>
+                  <TouchableOpacity 
+                    style={[styles.memberBadge, isSelected ? styles.badgeSelected : styles.badgeUnselected]}
+                    onPress={() => toggleUserSelection(member.user.id)}
+                  >
+                    <Text style={[styles.memberText, isSelected ? styles.textSelected : styles.textUnselected]}>
+                      {isSelected ? "☑️" : "⬜"} {member.user.name}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {isCustomSplit && isSelected && (
+                      <TextInput 
+                          style={styles.smallInput}
+                          placeholder="Số tiền"
+                          keyboardType="numeric"
+                          value={customAmounts[member.user.id] || ''}
+                          onChangeText={(t) => handleAmountChange(member.user.id, t)}
+                      />
+                  )}
+              </View>
+            );
+          })}
+        </View>
+
+        {/* --- PHẦN HIỂN THỊ NGƯỜI CHỊU LÃI --- */}
+        {(parseFloat(profitPercentage) > 0) && (
+          <View>
+            <Text style={[styles.sectionTitle, { color: '#e67e22', marginTop: 20 }]}>Ai chịu lãi {profitPercentage}%?</Text>
+            <View style={{flexDirection:'row', flexWrap:'wrap'}}>
+              {members.map((member) => {
+                if (!involvedUserIds.includes(member.user.id)) return null;
+                
+                const isProfitPayer = profitPayerIds.includes(member.user.id);
+                
+                let userPrincipal = 0;
+                if (isCustomSplit) {
+                    userPrincipal = parseFloat(customAmounts[member.user.id] || 0);
+                } else {
+                    userPrincipal = (parseFloat(amount) || 0) / involvedUserIds.length;
+                }
+                const userProfit = (userPrincipal * parseFloat(profitPercentage)) / 100;
+
+                return (
+                  <TouchableOpacity 
+                    key={`profit-${member.user.id}`} 
+                    style={[styles.profitBadge, isProfitPayer ? styles.badgeProfit : styles.badgeUnselected]}
+                    onPress={() => toggleProfitPayer(member.user.id)}
+                  >
+                      <View>
+                          <Text style={[styles.memberText, isProfitPayer ? {color: '#d35400', fontWeight:'bold'} : styles.textUnselected]}>
+                              {isProfitPayer ? "💸" : "🙅"} {member.user.name}
+                          </Text>
+                          {isProfitPayer && (
+                              <Text style={{fontSize: 10, color: '#d35400', textAlign: 'center'}}>
+                                  +{formatCurrency(userProfit)}
+                              </Text>
+                          )}
+                      </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
+        <View style={{marginTop: 30, marginBottom: 20}}>
+          {loading ? <ActivityIndicator size="large" color="blue" /> : <Button title="GỬI YÊU CẦU" onPress={handleSave} color="#28a745" />}
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 

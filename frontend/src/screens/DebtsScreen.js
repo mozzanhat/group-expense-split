@@ -1,12 +1,14 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { 
   View, Text, StyleSheet, FlatList, RefreshControl, Alert, 
-  TouchableOpacity, TextInput, Modal, ActivityIndicator, Image 
+  TouchableOpacity, TextInput, Modal, ActivityIndicator, Image, Platform 
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import api from '../api';
 import { useAuth } from '../context/AuthContext';
 import { formatCurrency } from '../utils/format';
+import { captureRef } from 'react-native-view-shot';
+import * as MediaLibrary from 'expo-media-library';
 
 export default function DebtsScreen({ route, navigation }) {
   const { groupId } = route.params;
@@ -15,18 +17,20 @@ export default function DebtsScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Modal Thu tiền (Xử lý tiền mặt)
+  // Modal Thu tiền
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedDebtorId, setSelectedDebtorId] = useState(null); 
   const [selectedDebtorName, setSelectedDebtorName] = useState('');
   const [settleAmount, setSettleAmount] = useState(''); 
 
-  // ✅ MODAL QR CODE
+  // Modal QR Code
   const [qrModalVisible, setQrModalVisible] = useState(false);
   const [qrUrl, setQrUrl] = useState('');
   const [qrInfo, setQrInfo] = useState({ name: '', amount: 0 });
 
-  // --- 1. GỌI API ---
+  const viewRef = useRef();
+  const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
+
   const fetchDebts = async () => {
     try {
       const response = await api.get(`/groups/${groupId}/debts`);
@@ -43,7 +47,40 @@ export default function DebtsScreen({ route, navigation }) {
   useFocusEffect(useCallback(() => { fetchDebts(); }, [groupId]));
   const onRefresh = () => { setRefreshing(true); fetchDebts(); };
 
-  // --- CÁC HÀM XỬ LÝ ---
+  // --- LOGIC TÍNH TOÁN THANH TRẠNG THÁI ---
+  const calculateProgress = () => {
+    if (!data || !data.debts) return { settled: 0, outstanding: 0, percent: 0 };
+
+    // 1. Tổng tiền ĐÃ TRẢ (Settled)
+    // Cộng dồn số tiền 'received' (đã thu) của tất cả mọi người
+    const totalSettled = data.debts.reduce((sum, member) => sum + (member.received || 0), 0);
+
+    // 2. Tổng tiền ĐANG NỢ (Outstanding)
+    // Cộng dồn tất cả các khoản người khác nợ mình (credits) của tất cả thành viên
+    let totalOutstanding = 0;
+    data.debts.forEach(member => {
+        if (member.credits) {
+            member.credits.forEach(c => totalOutstanding += c.amount);
+        }
+    });
+
+    // 3. Tổng quy mô nợ
+    const totalVolume = totalSettled + totalOutstanding;
+    
+    // 4. Phần trăm
+    const percent = totalVolume > 0 ? (totalSettled / totalVolume) * 100 : 0; // Nếu không có nợ thì là 0%
+
+    // Trường hợp đặc biệt: Nếu không có nợ (totalVolume = 0) nhưng có chi tiêu -> Coi như hoàn thành 100%
+    const finalPercent = totalVolume === 0 && data.total > 0 ? 100 : percent;
+
+    return { 
+        settled: totalSettled, 
+        outstanding: totalOutstanding, 
+        percent: finalPercent 
+    };
+  };
+
+  // --- CÁC HÀM XỬ LÝ (Giữ nguyên) ---
   const handleNotifyPayment = async (creditorId, amount) => {
     try {
         await api.post(`/groups/${groupId}/notify-payment`, { creditorId, amount });
@@ -87,23 +124,15 @@ export default function DebtsScreen({ route, navigation }) {
     setModalVisible(true);
   };
 
-  // ✅ HÀM MỞ QR CODE
   const openQrModal = (creditor) => {
-    // 1. Kiểm tra xem chủ nợ có thông tin ngân hàng chưa
     if (!creditor.bankBin || !creditor.bankAccount) {
         Alert.alert("Thông báo", `Chủ nợ ${creditor.toName} chưa cập nhật thông tin ngân hàng trong Hồ sơ.`);
         return;
     }
-
-    // 2. Tạo nội dung chuyển khoản: "TenBan tra no" (Không dấu, ngắn gọn)
-    // Loại bỏ dấu tiếng Việt để tránh lỗi ngân hàng
     const removeVietnameseTones = (str) => {
         return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D');
     }
     const content = `${removeVietnameseTones(user.name)} tra no`; 
-
-    // 3. Tạo Link VietQR
-    // Format: https://img.vietqr.io/image/[BIN]-[Account]-compact.png?amount=[Amount]&addInfo=[Content]
     const url = `https://img.vietqr.io/image/${creditor.bankBin}-${creditor.bankAccount}-compact2.png?amount=${creditor.amount}&addInfo=${encodeURIComponent(content)}`;
     
     setQrUrl(url);
@@ -111,24 +140,61 @@ export default function DebtsScreen({ route, navigation }) {
     setQrModalVisible(true);
   };
 
-  // --- 2. RENDER GIAO DIỆN ---
+  const handleSaveQr = async () => {
+    try {
+        if (permissionResponse?.status !== 'granted') {
+            const { status } = await requestPermission();
+            if (status !== 'granted') {
+                Alert.alert("Lỗi", "Cần cấp quyền truy cập thư viện ảnh để lưu!");
+                return;
+            }
+        }
+        const localUri = await captureRef(viewRef, { format: 'png', quality: 1 });
+        await MediaLibrary.saveToLibraryAsync(localUri);
+        if (localUri) Alert.alert("Thành công", "Đã lưu ảnh QR vào thư viện!");
+    } catch (e) {
+        console.log(e);
+        Alert.alert("Lỗi", "Không thể lưu ảnh.");
+    }
+  };
+
+  // --- RENDER ---
+  
+  // ✅ 1. Component Thanh Trạng Thái (MỚI)
+  const renderProgressBar = () => {
+    const { settled, outstanding, percent } = calculateProgress();
+    
+    return (
+        <View style={styles.progressContainer}>
+            <View style={styles.progressLabelRow}>
+                <Text style={styles.progressLabel}>Tiến độ thanh toán:</Text>
+                <Text style={styles.progressPercent}>{percent.toFixed(0)}%</Text>
+            </View>
+            
+            {/* Thanh Bar */}
+            <View style={styles.progressBarBackground}>
+                <View style={[styles.progressBarFill, { width: `${percent}%` }]} />
+            </View>
+
+            <View style={styles.progressStatsRow}>
+                <Text style={styles.progressSmallText}>✅ Đã trả: {formatCurrency(settled)}</Text>
+                <Text style={styles.progressSmallText}>⏳ Còn nợ: {formatCurrency(outstanding)}</Text>
+            </View>
+        </View>
+    );
+  };
 
   const renderPendingExpenses = () => {
     if (!data?.pendingExpenses || data.pendingExpenses.length === 0) return null;
     return (
       <View style={styles.pendingContainer}>
         <Text style={styles.pendingHeader}>⏳ Hàng chờ duyệt ({data.pendingExpenses.length})</Text>
-        <Text style={{fontSize: 12, color: '#666', marginBottom: 10, fontStyle: 'italic'}}>
-            (Chi phí mới tạo chưa được tính vào nợ. Cần vào Sửa nhóm để duyệt)
-        </Text>
         {data.pendingExpenses.map((item) => (
           <View key={item.id} style={styles.pendingItem}>
             <View style={{flex: 1}}>
                 <Text style={styles.pendingDesc}>{item.description}</Text>
                 <Text style={styles.pendingDetail}>👤 Tạo bởi: {item.paidBy?.name}</Text>
-                {item.dueDate && (
-                     <Text style={styles.pendingDetail}>📅 Hạn: {new Date(item.dueDate).toLocaleDateString('vi-VN')}</Text>
-                )}
+                {item.dueDate && <Text style={styles.pendingDetail}>📅 Hạn: {new Date(item.dueDate).toLocaleDateString('vi-VN')}</Text>}
             </View>
             <Text style={styles.pendingAmount}>{formatCurrency(item.amount)}</Text>
           </View>
@@ -142,8 +208,6 @@ export default function DebtsScreen({ route, navigation }) {
 
   const renderDebtItem = ({ item }) => {
     const isMe = item.userId === user.id;
-
-    // Danh sách Cần trả
     const renderDebtsList = () => {
         if (!item.debts || item.debts.length === 0) return null;
         return (
@@ -155,14 +219,11 @@ export default function DebtsScreen({ route, navigation }) {
                             <Text style={styles.debtText}>→ Trả {d.toName}: <Text style={{fontWeight:'bold'}}>{formatCurrency(d.amount)}</Text></Text>
                             {d.dueDate && <Text style={styles.dateText}> (Hạn: {new Date(d.dueDate).toLocaleDateString('vi-VN')})</Text>}
                         </View>
-                        
                         {isMe && !d.pending && (
                             <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                                {/* ✅ NÚT QR CODE */}
                                 <TouchableOpacity style={styles.qrButton} onPress={() => openQrModal(d)}>
                                     <Text style={{fontSize: 20}}>🏧</Text>
                                 </TouchableOpacity>
-
                                 <TouchableOpacity style={styles.payButton} onPress={() => handleNotifyPayment(d.toId, d.amount)}>
                                     <Text style={styles.btnText}>Đã Trả</Text>
                                 </TouchableOpacity>
@@ -175,7 +236,6 @@ export default function DebtsScreen({ route, navigation }) {
         );
     };
 
-    // Danh sách Được nhận
     const renderCreditsList = () => {
         if (!item.credits || item.credits.length === 0) return null;
         return (
@@ -222,44 +282,40 @@ export default function DebtsScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.summary}><Text style={styles.summaryText}>Tổng chi tiêu nhóm: {formatCurrency(data?.total || 0)}</Text></View>
+      {/* 2. CHÈN THANH TRẠNG THÁI VÀO ĐÂY */}
+      <View style={styles.headerBlock}>
+          <Text style={styles.summaryText}>Tổng chi tiêu nhóm: {formatCurrency(data?.total || 0)}</Text>
+          {renderProgressBar()}
+      </View>
       
       <FlatList 
-        data={data?.debts} 
-        keyExtractor={item => item.userId.toString()} 
-        renderItem={renderDebtItem}
+        data={data?.debts} keyExtractor={item => item.userId.toString()} renderItem={renderDebtItem}
         ListHeaderComponent={renderPendingExpenses()} 
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       />
 
-      {/* ✅ MODAL QR CODE */}
+      {/* Modal QR Code */}
       <Modal visible={qrModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
             <View style={styles.modalQrView}>
-                <Text style={styles.modalTitle}>Quét mã để trả tiền</Text>
-                <Text style={{marginBottom: 10}}>Chủ tài khoản: <Text style={{fontWeight:'bold'}}>{qrInfo.name}</Text></Text>
-                <Text style={{marginBottom: 20, fontSize: 18, color: 'green', fontWeight:'bold'}}>{formatCurrency(qrInfo.amount)}</Text>
-                
-                {/* ẢNH QR TỪ VIETQR */}
-                {qrUrl ? (
-                    <Image 
-                        source={{ uri: qrUrl }} 
-                        style={{ width: 250, height: 250, marginBottom: 20 }} 
-                        resizeMode="contain"
-                    />
-                ) : <ActivityIndicator />}
-                
-                <TouchableOpacity 
-                    style={[styles.modalBtn, {backgroundColor: '#007bff', width: '100%'}]} 
-                    onPress={() => setQrModalVisible(false)}
-                >
-                    <Text style={{color:'white', textAlign:'center'}}>Đóng</Text>
-                </TouchableOpacity>
+                <View ref={viewRef} collapsable={false} style={styles.qrCaptureArea}>
+                    <Text style={styles.modalTitle}>Quét mã để trả tiền</Text>
+                    <Text style={{marginBottom: 5}}>Chủ tài khoản: <Text style={{fontWeight:'bold'}}>{qrInfo.name}</Text></Text>
+                    <Text style={{marginBottom: 15, fontSize: 18, color: 'green', fontWeight:'bold'}}>{formatCurrency(qrInfo.amount)}</Text>
+                    {qrUrl ? (
+                        <Image source={{ uri: qrUrl }} style={{ width: 220, height: 220 }} resizeMode="contain" />
+                    ) : <ActivityIndicator />}
+                    <Text style={{fontSize:10, color:'#999', marginTop:5}}>Được tạo bởi App Chia Tiền</Text>
+                </View>
+                <View style={{flexDirection:'row', marginTop: 20, width: '100%', justifyContent:'space-between'}}>
+                    <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#6c757d', flex: 1, marginRight: 5}]} onPress={() => setQrModalVisible(false)}><Text style={{color:'white', textAlign:'center'}}>Đóng</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#28a745', flex: 1, marginLeft: 5}]} onPress={handleSaveQr}><Text style={{color:'white', textAlign:'center'}}>📸 Lưu ảnh</Text></TouchableOpacity>
+                </View>
             </View>
         </View>
       </Modal>
 
-      {/* Modal Thu tiền (Giữ nguyên) */}
+      {/* Modal Thu tiền */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
             <View style={styles.modalView}>
@@ -279,9 +335,21 @@ export default function DebtsScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5', padding: 10 },
-  summary: { backgroundColor: '#333', padding: 15, borderRadius: 10, marginBottom: 10 },
-  summaryText: { color: 'white', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
   
+  // Header Styles (Thay đổi phần summary cũ)
+  headerBlock: { backgroundColor: '#333', padding: 15, borderRadius: 10, marginBottom: 10 },
+  summaryText: { color: 'white', fontSize: 18, fontWeight: 'bold', textAlign: 'center', marginBottom: 15 },
+
+  // Progress Bar Styles (MỚI)
+  progressContainer: { backgroundColor: 'rgba(255,255,255,0.1)', padding: 10, borderRadius: 8 },
+  progressLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
+  progressLabel: { color: '#ddd', fontSize: 12 },
+  progressPercent: { color: '#4cd137', fontWeight: 'bold' },
+  progressBarBackground: { height: 8, backgroundColor: '#555', borderRadius: 4, overflow: 'hidden', marginBottom: 5 },
+  progressBarFill: { height: '100%', backgroundColor: '#4cd137', borderRadius: 4 },
+  progressStatsRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  progressSmallText: { color: '#aaa', fontSize: 11 },
+
   // Pending Styles
   pendingContainer: { backgroundColor: '#fff3cd', padding: 10, borderRadius: 10, marginBottom: 15, borderWidth: 1, borderColor: '#ffeeba' },
   pendingHeader: { fontSize: 16, fontWeight: 'bold', color: '#856404', marginBottom: 5 },
@@ -307,20 +375,17 @@ const styles = StyleSheet.create({
   emptyText: { textAlign: 'center', color: '#999', fontStyle: 'italic', marginTop: 10 },
   
   payButton: { backgroundColor: '#e67e22', paddingVertical: 5, paddingHorizontal: 10, borderRadius: 4 },
-  qrButton: { marginRight: 10, padding: 5 }, // Nút QR
+  qrButton: { marginRight: 10, padding: 5 },
   actionBtn: { paddingVertical: 5, paddingHorizontal: 8, borderRadius: 4, marginLeft: 5 },
   confirmBtn: { backgroundColor: '#28a745' },
   rejectBtn: { backgroundColor: '#dc3545' },
   btnText: { color: 'white', fontWeight: 'bold', fontSize: 11 },
   waitingText: { fontSize: 11, color: '#e67e22', fontStyle: 'italic' },
 
-  // Modal Normal
   modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
   modalView: { width: '80%', backgroundColor: 'white', padding: 20, borderRadius: 10, elevation: 5 },
-  
-  // Modal QR
   modalQrView: { width: '90%', backgroundColor: 'white', padding: 20, borderRadius: 10, elevation: 5, alignItems: 'center' },
-  
+  qrCaptureArea: { alignItems: 'center', backgroundColor: 'white', padding: 10, borderRadius: 5 },
   modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10 },
   modalInput: { borderWidth: 1, borderColor: '#ccc', borderRadius: 5, padding: 10, marginVertical: 10, fontSize: 16 },
   modalButtons: { flexDirection: 'row', justifyContent: 'flex-end' },
