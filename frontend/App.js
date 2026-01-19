@@ -4,6 +4,9 @@ import AppNavigator from './src/navigation/AppNavigator'; // 2. Import 'bộ đi
 
 import ProfileScreen from './src/screens/ProfileScreen';
 
+import CreateFundraisingScreen from './src/screens/CreateFundraisingScreen';
+import FundraisingDetailScreen from './src/screens/FundraisingDetailScreen';
+
 export default function App() {
   return (
     // 3. Bao bọc toàn bộ ứng dụng bằng AuthProvider

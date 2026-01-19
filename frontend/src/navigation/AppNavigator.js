@@ -12,17 +12,16 @@ import GroupDetailScreen from '../screens/GroupDetailScreen';
 import AddExpenseScreen from '../screens/AddExpenseScreen';
 import DebtsScreen from '../screens/DebtsScreen'; 
 import InviteMemberScreen from '../screens/InviteMemberScreen'; 
-
 import EditExpenseScreen from '../screens/EditExpenseScreen';
-
 import ProfileScreen from '../screens/ProfileScreen';
-// 1. NHỚ IMPORT MÀN HÌNH TẠO NHÓM
 import CreateGroupScreen from '../screens/CreateGroupScreen'; 
-
 import EditGroupScreen from '../screens/EditGroupScreen';
+import CreateFundraisingScreen from '../screens/CreateFundraisingScreen';
+import FundraisingDetailScreen from '../screens/FundraisingDetailScreen';
 
 const Stack = createNativeStackNavigator();
 
+// Stack Chính (Chứa các màn hình cơ bản)
 function MainStack() {
   return (
     <Stack.Navigator>
@@ -32,10 +31,10 @@ function MainStack() {
         options={{ title: 'Trang Chủ', headerShown: false }} 
       />
       <Stack.Screen 
-    name="Profile" 
-    component={ProfileScreen} 
-    options={{ title: 'Hồ sơ cá nhân' }} 
-  />
+        name="Profile" 
+        component={ProfileScreen} 
+        options={{ title: 'Hồ sơ cá nhân' }} 
+      />
       <Stack.Screen 
         name="GroupDetail" 
         component={GroupDetailScreen} 
@@ -48,6 +47,7 @@ function MainStack() {
         component={DebtsScreen} 
         options={{ title: 'Tình Hình Nợ' }} 
       />
+      {/* ❌ ĐÃ XÓA 2 MÀN HÌNH FUNDRAISING Ở ĐÂY VÌ TRÙNG */}
     </Stack.Navigator>
   );
 }
@@ -67,50 +67,59 @@ export default function AppNavigator() {
     <NavigationContainer>
       <Stack.Navigator>
         {token == null ? (
-          <>
+          <Stack.Group>
             <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: false }} />
-          </>
+          </Stack.Group>
         ) : (
           <Stack.Group>
+            {/* Main Stack */}
             <Stack.Screen 
               name="Main" 
               component={MainStack} 
               options={{ headerShown: false }} 
             />
             
+            {/* Các màn hình Modal / Chức năng phụ */}
             <Stack.Screen 
               name="AddExpense" 
               component={AddExpenseScreen} 
               options={{ presentation: 'modal', title: 'Thêm Chi Phí Mới' }} 
             />
-            
             <Stack.Screen 
               name="InviteMember" 
               component={InviteMemberScreen} 
               options={{ presentation: 'modal', title: 'Mời Thành Viên' }} 
             />
-
             <Stack.Screen
               name="CreateGroup"
               component={CreateGroupScreen} 
               options={{ title: 'Tạo Nhóm Mới' }}
             />
-
             <Stack.Screen 
-            name="EditExpense" 
-            component={EditExpenseScreen} 
-            options={{ title: 'Sửa Chi Phí', presentation: 'modal' }} 
+              name="EditExpense" 
+              component={EditExpenseScreen} 
+              options={{ title: 'Sửa Chi Phí', presentation: 'modal' }} 
             />
-
             <Stack.Screen 
-            name="EditGroup" 
-            component={EditGroupScreen} 
-            options={{ title: 'Đổi Tên Nhóm', presentation: 'modal' }} 
+              name="EditGroup" 
+              component={EditGroupScreen} 
+              options={{ title: 'Đổi Tên Nhóm', presentation: 'modal' }} 
+            />
+            
+            {/* ✅ GIỮ LẠI Ở ĐÂY LÀ ĐÚNG RỒI */}
+            <Stack.Screen 
+              name="CreateFundraising" 
+              component={CreateFundraisingScreen} 
+              options={{ title: 'Tạo Gọi Vốn' }} 
+            />
+            <Stack.Screen 
+              name="FundraisingDetail" 
+              component={FundraisingDetailScreen} 
+              options={{ title: 'Chi Tiết Gọi Vốn' }} 
             />
             
           </Stack.Group>
-          
         )}
       </Stack.Navigator>
     </NavigationContainer>

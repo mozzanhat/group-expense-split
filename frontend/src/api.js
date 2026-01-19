@@ -11,6 +11,7 @@ const instance = axios.create({
     },
 });
 
-// 2. QUAN TRỌNG NHẤT: Phải dùng export default
+// 2. QUAN TRỌNG NHẤT: Phải dùng export default\\
+
 export default instance;
 

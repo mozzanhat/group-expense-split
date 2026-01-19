@@ -89,12 +89,26 @@ export default function DebtsScreen({ route, navigation }) {
     } catch (error) { Alert.alert("Lỗi", "Không gửi được thông báo"); }
   };
 
+const handleApprove = async (expenseId) => {
+    try {
+      // Gọi API duyệt chi phí (Backend cần có API này)
+      await api.put(`/expenses/${expenseId}/approve`);
+      Alert.alert("Thành công", "Đã duyệt chi phí! Nợ đã được tính.");
+      fetchDebts(); // Tải lại dữ liệu
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Lỗi", "Không thể duyệt chi phí.");
+    }
+  };
+
   const handleConfirm = async (expenseId) => {
     try {
         await api.put(`/expenses/${expenseId}/confirm`);
-        Alert.alert("Thành công", "Đã xác nhận!");
+        Alert.alert("Thành công", "Đã xác nhận thanh toán!");
         fetchDebts();
-    } catch (error) { Alert.alert("Lỗi", "Lỗi xác nhận"); }
+    } catch (error) {
+        Alert.alert("Lỗi", "Không thể xác nhận.");
+    }
   };
 
   const handleReject = async (expenseId) => {
@@ -106,15 +120,15 @@ export default function DebtsScreen({ route, navigation }) {
   };
 
   const handleManualSettle = async () => {
-    if (!settleAmount) return;
-    try {
-      await api.post(`/groups/${groupId}/settle`, {
-        debtorId: selectedDebtorId,
-        amount: parseFloat(settleAmount)
-      });
-      setModalVisible(false);
-      fetchDebts(); 
-    } catch (error) { Alert.alert("Lỗi", "Lỗi"); }
+   try {
+      // Gọi API duyệt chi phí (Backend cần có API này)
+      await api.put(`/expenses/${expenseId}/approve`);
+      Alert.alert("Thành công", "Đã duyệt chi phí! Nợ đã được tính.");
+      fetchDebts(); // Tải lại dữ liệu
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Lỗi", "Không thể duyệt chi phí.");
+    }
   };
 
   const openSettleModal = (debtorId, debtorName, amount) => {
@@ -184,24 +198,58 @@ export default function DebtsScreen({ route, navigation }) {
     );
   };
 
-  const renderPendingExpenses = () => {
+const renderPendingExpenses = () => {
     if (!data?.pendingExpenses || data.pendingExpenses.length === 0) return null;
+    
     return (
       <View style={styles.pendingContainer}>
         <Text style={styles.pendingHeader}>⏳ Hàng chờ duyệt ({data.pendingExpenses.length})</Text>
-        {data.pendingExpenses.map((item) => (
-          <View key={item.id} style={styles.pendingItem}>
-            <View style={{flex: 1}}>
-                <Text style={styles.pendingDesc}>{item.description}</Text>
-                <Text style={styles.pendingDetail}>👤 Tạo bởi: {item.paidBy?.name}</Text>
-                {item.dueDate && <Text style={styles.pendingDetail}>📅 Hạn: {new Date(item.dueDate).toLocaleDateString('vi-VN')}</Text>}
-            </View>
-            <Text style={styles.pendingAmount}>{formatCurrency(item.amount)}</Text>
-          </View>
-        ))}
-        <TouchableOpacity style={styles.voteLinkButton} onPress={() => navigation.navigate('EditGroup', { groupId })}>
-            <Text style={styles.voteLinkText}>👉 Vào "Sửa nhóm" để Duyệt ngay</Text>
-        </TouchableOpacity>
+        <Text style={{fontSize: 12, color: '#666', marginBottom: 10, fontStyle: 'italic'}}>
+            (Tất cả thành viên liên quan phải duyệt thì nợ mới được tính)
+        </Text>
+        
+        {data.pendingExpenses.map((item) => {
+            // Tìm xem mình (user hiện tại) nằm ở đâu trong danh sách chia tiền
+            // Lưu ý: Backend cần trả về include: { splits: true } trong API get debts
+            const mySplit = item.splits?.find(s => s.userId === user.id);
+            const hasApproved = mySplit?.hasApproved; // Kiểm tra mình đã duyệt chưa
+
+            return (
+              <View key={item.id} style={styles.pendingItem}>
+                {/* Bên trái: Thông tin */}
+                <View style={{flex: 1, marginRight: 10}}>
+                    <Text style={styles.pendingDesc}>{item.description}</Text>
+                    <Text style={styles.pendingDetail}>👤 Tạo bởi: {item.paidBy?.name}</Text>
+                    {item.dueDate && <Text style={styles.pendingDetail}>📅 Hạn: {new Date(item.dueDate).toLocaleDateString('vi-VN')}</Text>}
+                    
+                    {/* Hiển thị tiến độ duyệt */}
+                    <Text style={{fontSize: 11, color: '#888', marginTop: 3}}>
+                       {item.splits.filter(s => s.hasApproved).length}/{item.splits.length} người đã duyệt
+                    </Text>
+                </View>
+
+                {/* Bên phải: Nút Duyệt hoặc Trạng thái */}
+                <View style={{alignItems: 'flex-end', justifyContent: 'center'}}>
+                    <Text style={styles.pendingAmount}>{formatCurrency(item.amount)}</Text>
+                    
+                    {!hasApproved ? (
+                        // Nếu chưa duyệt thì hiện nút
+                        <TouchableOpacity 
+                            style={[styles.actionBtn, styles.confirmBtn, {marginTop: 5}]}
+                            onPress={() => handleApprove(item.id)}
+                        >
+                            <Text style={styles.btnText}>✔ Duyệt</Text>
+                        </TouchableOpacity>
+                    ) : (
+                        // Nếu đã duyệt rồi thì hiện text chờ
+                        <Text style={{fontSize: 11, color: '#f39c12', marginTop: 5, fontStyle: 'italic'}}>
+                            ⏳ Đang chờ...
+                        </Text>
+                    )}
+                </View>
+              </View>
+            );
+        })}
       </View>
     );
   };

@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -12,30 +9,34 @@ datasource db {
 
 // Bảng lưu thông tin người dùng
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String?
-  name      String?
+  id          Int      @id @default(autoincrement())
+  email       String   @unique
+  password    String?
+  name        String?
   
   // --- CÁC TRƯỜNG MỚI ---
-  username      String?  @unique // Tên đăng nhập
-  phone         String?  // Số điện thoại
-  address       String?  // Địa chỉ
-  gender        String?  // Nam/Nữ/Khác
-  dob           DateTime? // Ngày sinh
-  cccd          String?   // Căn cước công dân
-  bankAccount   String?   // Số tài khoản ngân hàng
-  bankBin       String?   // Mã BIN ngân hàng
-  bankName      String?   // Tên ngân hàng (Lưu tên cho dễ hiển thị)
+  username      String?  @unique
+  phone         String?  
+  address       String?  
+  gender        String?  
+  dob           DateTime? 
+  cccd          String?   
+  bankAccount   String?   
+  bankBin       String?   
+  bankName      String?   
   
-  // ... Các trường cũ giữ nguyên
   googleId      String?  @unique
   avatar        String?
-  expenses      Expense[]     @relation("ExpensePayer")
-  groupMembers  GroupMember[]
-  expenseSplits ExpenseSplit[]
   createdAt     DateTime @default(now())
-  createdGroups Group[] @relation("GroupCreator")
+
+  // Quan hệ
+  expenses          Expense[]      @relation("ExpensePayer")
+  groupMembers      GroupMember[]
+  expenseSplits     ExpenseSplit[]
+  createdGroups     Group[]        @relation("GroupCreator")
+  
+  fundraisingsCreated Fundraising[] @relation("FundraisingCreator")
+  contributions       Contribution[]
 }
 
 // Bảng lưu thông tin nhóm
@@ -44,58 +45,46 @@ model Group {
   name      String
   createdAt DateTime @default(now())
 
-  // Quan hệ: 1 Group được tạo bởi 1 User (Khớp tên "GroupCreator" với bảng User)
   creatorId Int
   creator   User   @relation("GroupCreator", fields: [creatorId], references: [id])
 
-  // Quan hệ: 1 Group có nhiều GroupMember
-  members GroupMember[]
-
-  // Quan hệ: 1 Group có nhiều Expense
-  expenses Expense[]
+  members      GroupMember[]
+  expenses     Expense[]
+  fundraisings Fundraising[]
 }
 
-// Bảng nối User và Group (Quan hệ nhiều-nhiều)
+// Bảng nối User và Group
 model GroupMember {
   joinedAt DateTime @default(now())
 
-  // Quan hệ: 1 GroupMember thuộc về 1 User
   userId Int
   user   User @relation(fields: [userId], references: [id])
 
-  // Quan hệ: 1 GroupMember thuộc về 1 Group
   groupId Int
-  group   Group @relation(fields: [groupId], references: [id])
+  group   Group @relation(fields: [groupId], references: [id], onDelete: Cascade) // Xóa Group -> Xóa Member
 
-  // Khóa chính phức hợp: đảm bảo 1 user chỉ ở trong 1 group 1 lần
   @@id([userId, groupId])
 }
 
-// Bảng lưu các khoản chi tiêu------------------------------------------
-// ... Các model User, Group giữ nguyên ...
-
-// ... (User, Group giữ nguyên)
-
+// Bảng chi tiêu
 model Expense {
   id          Int      @id @default(autoincrement())
   description String
-  amount      Float
+  amount      Float    // Giữ nguyên Float theo code cũ của bạn
   profit      Float    @default(0)
   dueDate     DateTime?
   
-  // 1. Trạng thái thanh toán (Cũ: dùng để xác nhận đã trả nợ xong chưa)
   isConfirmed Boolean  @default(false) 
-  
-  // 2. MỚI: Trạng thái duyệt của nhóm (Hàng chờ vs Hàng chính)
-  // false = Hàng chờ (Pending), true = Hàng chính (Active)
   isApproved  Boolean  @default(false)
 
   createdAt   DateTime @default(now())
   
   groupId     Int
-  group       Group    @relation(fields: [groupId], references: [id])
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade) // Xóa Group -> Xóa Expense
+  
   paidById    Int
   paidBy      User     @relation("ExpensePayer", fields: [paidById], references: [id])
+  
   splits      ExpenseSplit[] 
 }
 
@@ -105,13 +94,42 @@ model ExpenseSplit {
   userId    Int
   user      User    @relation(fields: [userId], references: [id])
 
-  // 3. MỚI: Người này có phải trả tiền lời không?
-  paysProfit Boolean @default(false)
-
-  // 4. MỚI: Người này đã bấm Đồng ý chưa?
+  paysProfit  Boolean @default(false)
   hasApproved Boolean @default(false)
-
   amount      Float   @default(0)
 
   @@id([expenseId, userId])
+}
+
+// 1. Bảng Quản lý đợt Gọi vốn
+model Fundraising {
+  id            Int      @id @default(autoincrement())
+  groupId       Int
+  group         Group    @relation(fields: [groupId], references: [id], onDelete: Cascade) // Xóa Group -> Xóa Fundraising
+  
+  creatorId     Int      
+  creator       User     @relation("FundraisingCreator", fields: [creatorId], references: [id])
+  
+  description   String   
+  targetAmount  Decimal  
+  currentAmount Decimal  @default(0) 
+  interestRate  Float    @default(0) 
+  
+  status        String   @default("OPEN") 
+  createdAt     DateTime @default(now())
+  
+  contributions Contribution[]
+}
+
+// 2. Bảng Lưu lịch sử đóng góp
+model Contribution {
+  id            Int         @id @default(autoincrement())
+  fundraisingId Int
+  fundraising   Fundraising @relation(fields: [fundraisingId], references: [id], onDelete: Cascade)
+  
+  userId        Int
+  user          User        @relation(fields: [userId], references: [id])
+  
+  amount        Decimal     
+  createdAt     DateTime    @default(now())
 }

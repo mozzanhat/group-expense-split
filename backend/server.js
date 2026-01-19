@@ -753,6 +753,236 @@ fastify.put('/profile', { onRequest: [authenticate] }, async (request, reply) =>
     }
 });
 
+// --- API: TẠO GỌI VỐN (MỚI) ---
+fastify.post('/fundraisings', { onRequest: [authenticate] }, async (request, reply) => {
+    const { groupId, description, targetAmount, interestRate } = request.body;
+    try {
+        const fundraising = await prisma.fundraising.create({
+            data: {
+                groupId: parseInt(groupId),
+                creatorId: request.user.id,
+                description,
+                targetAmount: parseFloat(targetAmount),
+                interestRate: parseFloat(interestRate),
+                currentAmount: 0,
+                status: 'OPEN'
+            }
+        });
+        reply.send(fundraising);
+    } catch (err) {
+        console.error(err);
+        reply.status(500).send(err);
+    }
+});
+
+// --- API: LẤY DANH SÁCH GỌI VỐN CỦA NHÓM ---
+fastify.get('/groups/:id/fundraisings', { onRequest: [authenticate] }, async (request, reply) => {
+    try {
+        const list = await prisma.fundraising.findMany({
+            where: { 
+                groupId: parseInt(request.params.id),
+                status: 'OPEN' // Chỉ lấy các đợt đang mở
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+        reply.send(list);
+    } catch (err) { reply.status(500).send(err); }
+});
+
+// --- API: CHI TIẾT GỌI VỐN & DANH SÁCH NGƯỜI GÓP ---
+fastify.get('/fundraisings/:id', { onRequest: [authenticate] }, async (request, reply) => {
+    try {
+        const id = parseInt(request.params.id);
+        const info = await prisma.fundraising.findUnique({ where: { id } });
+        
+        const contributions = await prisma.contribution.findMany({
+            where: { fundraisingId: id },
+            include: { user: true }, // Lấy tên người góp
+            orderBy: { createdAt: 'desc' }
+        });
+
+        reply.send({ info, contributions });
+    } catch (err) { reply.status(500).send(err); }
+});
+
+// --- API: GÓP VỐN (CONTRIBUTE) ---
+fastify.post('/fundraisings/:id/contribute', { onRequest: [authenticate] }, async (request, reply) => {
+    const fundraisingId = parseInt(request.params.id);
+    const { amount } = request.body; // Số tiền người dùng nhập
+    const userId = request.user.id;
+
+    try {
+        // 1. Lấy thông tin đợt gọi vốn hiện tại
+        const fund = await prisma.fundraising.findUnique({ where: { id: fundraisingId } });
+        if (!fund || fund.status !== 'OPEN') {
+            return reply.status(400).send({ message: "Đợt gọi vốn này đã kết thúc hoặc không tồn tại." });
+        }
+
+        // 2. Kiểm tra xem góp vào có bị dư không
+        const newTotal = parseFloat(fund.currentAmount) + parseFloat(amount);
+        if (newTotal > parseFloat(fund.targetAmount) + 1000) { // Cho phép lệch nhỏ < 1000đ
+             return reply.status(400).send({ message: "Số tiền góp vượt quá mục tiêu còn lại." });
+        }
+
+        // 3. TRANSACTION: Thực hiện Góp vốn + Cập nhật tổng
+        await prisma.$transaction(async (tx) => {
+            // A. Tạo bản ghi đóng góp
+            await tx.contribution.create({
+                data: {
+                    fundraisingId,
+                    userId,
+                    amount: parseFloat(amount)
+                }
+            });
+
+            // B. Cập nhật số tiền hiện tại của đợt gọi vốn
+            await tx.fundraising.update({
+                where: { id: fundraisingId },
+                data: { currentAmount: newTotal }
+            });
+        });
+
+       // 4. LOGIC TỰ ĐỘNG CHUYỂN THÀNH CHI PHÍ (EXPENSE) KHI ĐỦ TIỀN
+        // (Cho phép sai số nhỏ < 1000đ do làm tròn)
+        if (newTotal >= parseFloat(fund.targetAmount) - 1000) {
+            
+            // A. Lấy toàn bộ danh sách người đã góp
+            const allContributions = await prisma.contribution.findMany({
+                where: { fundraisingId }
+            });
+
+            // B. Gộp tiền của cùng 1 người
+            const userContributionsMap = {};
+            allContributions.forEach(c => {
+                const uid = c.userId;
+                if (!userContributionsMap[uid]) userContributionsMap[uid] = 0;
+                userContributionsMap[uid] += parseFloat(c.amount);
+            });
+
+            // ✅ C. TÍNH TOÁN LÃI CHUẨN (SỬA LẠI ĐOẠN NÀY)
+            const creatorId = fund.creatorId;
+            const totalPrincipal = parseFloat(fund.targetAmount);
+            
+            // Lấy số tiền người tạo đã tự góp (nếu có)
+            const creatorContribution = userContributionsMap[creatorId] || 0;
+            
+            // Số tiền thực sự là "Nợ" = Tổng tiền - Tiền người tạo tự bỏ ra
+            const debtPrincipal = totalPrincipal - creatorContribution;
+            
+            const interestRate = parseFloat(fund.interestRate) || 0;
+            
+            // Tiền lãi chỉ tính trên số tiền người khác nợ
+            // VD: Tổng 1tr, Lãi 10%. 
+            // - A (Chủ) góp 300k. B góp 700k.
+            // - Số tiền tính lãi = 700k.
+            // - Tổng lãi = 70.000đ.
+            const profitAmount = debtPrincipal * (interestRate / 100);
+
+            // D. Tạo mảng Splits
+            const expenseSplits = Object.keys(userContributionsMap).map(uid => {
+                const userId = parseInt(uid);
+                const isCreator = userId === creatorId;
+                
+                return {
+                    userId: userId,
+                    amount: userContributionsMap[uid], 
+                    
+                    // ✅ QUAN TRỌNG: Nếu là người tạo thì KHÔNG phải chịu lãi
+                    paysProfit: !isCreator, 
+                    
+                    hasApproved: false
+                };
+            });
+
+            // E. Tạo Expense mới vào Hàng chờ
+            await prisma.expense.create({
+                data: {
+                    groupId: fund.groupId,
+                    paidById: creatorId, // Người tạo gọi vốn là chủ nợ
+                    description: fund.description,
+                    
+                    amount: totalPrincipal, 
+                    profit: profitAmount,    // Tổng lãi (chỉ tính phần của người khác)
+                    
+                    isApproved: false, 
+                    isConfirmed: false,
+                    
+                    splits: {
+                        create: expenseSplits
+                    }
+                }
+            });
+
+            // F. Đóng đợt gọi vốn
+            await prisma.fundraising.update({
+                where: { id: fundraisingId },
+                data: { status: 'COMPLETED' }
+            });
+        }
+
+        reply.send({ success: true, currentAmount: newTotal });
+
+    } catch (err) {
+        console.error(err);
+        reply.status(500).send(err);
+    }
+});
+
+fastify.delete('/fundraisings/:id', { onRequest: [authenticate] }, async (request, reply) => {
+    try {
+        await prisma.fundraising.update({
+            where: { id: parseInt(request.params.id) },
+            data: { status: 'CANCELLED' } // Soft delete hoặc xóa hẳn tùy bạn
+        });
+        reply.send({ success: true });
+    } catch (err) { reply.status(500).send(err); }
+});
+
+// --- API: DUYỆT CHI PHÍ (Pending -> Active) ---
+// --- API: DUYỆT CHI PHÍ (Logic: Tất cả phải đồng ý) ---
+fastify.put('/expenses/:id/approve', { onRequest: [authenticate] }, async (request, reply) => {
+    try {
+        const expenseId = parseInt(request.params.id);
+        const userId = request.user.id;
+        
+        // 1. Đánh dấu là người này (userId) đã đồng ý
+        // Tìm bản ghi trong bảng ExpenseSplit và cập nhật hasApproved = true
+        await prisma.expenseSplit.updateMany({
+            where: {
+                expenseId: expenseId,
+                userId: userId
+            },
+            data: { hasApproved: true }
+        });
+
+        // 2. Kiểm tra xem CÒN AI chưa đồng ý không?
+        const totalSplits = await prisma.expenseSplit.count({
+            where: { expenseId: expenseId }
+        });
+
+        const approvedSplits = await prisma.expenseSplit.count({
+            where: { 
+                expenseId: expenseId,
+                hasApproved: true 
+            }
+        });
+
+        // 3. Nếu số người đồng ý == Tổng số người tham gia => DUYỆT CHÍNH THỨC
+        if (totalSplits === approvedSplits) {
+            await prisma.expense.update({
+                where: { id: expenseId },
+                data: { isApproved: true } // Lúc này mới thực sự chuyển sang Hàng chính
+            });
+            return reply.send({ message: "Đã duyệt. Khoản chi đã chính thức được tính!", status: "COMPLETED" });
+        } else {
+            return reply.send({ message: "Bạn đã duyệt. Đang chờ các thành viên khác...", status: "WAITING" });
+        }
+
+    } catch (err) {
+        console.error(err);
+        reply.status(500).send(err);
+    }
+});
 
 
 // Khởi động server
@@ -769,6 +999,5 @@ const start = async () => {
 
 
 
-//new 1.1.1
 
 start();
